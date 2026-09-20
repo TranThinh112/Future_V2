@@ -55,6 +55,16 @@ Healthcheck:
 /health
 ```
 
+Deployment verification:
+
+```text
+/api/runtime
+```
+
+This read-only endpoint reports the running app version, Railway commit/deployment
+identifiers, safe runtime mode, and whether token/cost audit logging is present.
+It never returns API keys or other secrets.
+
 The current runtime stores audit data in local SQLite (`crypto.db`) and paper checkpoints in `paper_state.json`. Railway ephemeral storage can be reset on redeploy; use PostgreSQL wiring before relying on historical audit retention.
 
 ## GitHub connection

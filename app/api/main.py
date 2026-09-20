@@ -1,3 +1,4 @@
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -69,3 +70,28 @@ def kill_switch():
 def safety_config():
     settings=Settings()
     return {"mode":settings.trading_mode,"live_enabled":settings.enable_live_trading,"allowed_symbols":settings.allowed_symbols,"max_position_pct":settings.max_position_pct,"max_total_exposure_pct":settings.max_total_exposure_pct,"withdrawals_supported":False}
+
+@app.get("/api/runtime")
+def runtime():
+    """Read-only deployment fingerprint and capability status; never exposes secrets."""
+    settings = Settings()
+    return {
+        "service": "crypto-agent",
+        "app_version": "0.1.0",
+        "code_revision": os.getenv("RAILWAY_GIT_COMMIT_SHA", os.getenv("GIT_COMMIT_SHA", "unknown")),
+        "deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID", "unknown"),
+        "runtime": {
+            "mode": settings.trading_mode,
+            "worker_running": bool(worker and worker.running),
+            "allowed_symbols": settings.allowed_symbols,
+        },
+        "capabilities": {
+            "ai_advisory": settings.enable_ai_advisory,
+            "ai_cost_logging": True,
+            "ai_token_logging": True,
+            "ai_consensus_cost_totals": True,
+            "paper_execution": settings.enable_paper_execution,
+            "live_trading": settings.enable_live_trading,
+            "withdrawals": False,
+        },
+    }
