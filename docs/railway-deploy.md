@@ -27,13 +27,18 @@ Required runtime variables:
 
 ```env
 OPENAI_MODEL=gpt-5.4-mini
-DATABASE_URL=<Railway PostgreSQL connection string>
-REDIS_URL=<Railway Redis connection string>
-AI_INPUT_COST_PER_MILLION=<model input price in USD per 1M tokens>
-AI_OUTPUT_COST_PER_MILLION=<model output price in USD per 1M tokens>
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+REDIS_URL=${{Redis.REDIS_URL}}
+AI_INPUT_COST_PER_MILLION=0.75
+AI_OUTPUT_COST_PER_MILLION=4.50
 ```
 
 Do not commit `.env` or put real secret values in `.env.example`.
+
+In Railway, provision PostgreSQL and Redis in the same project, then set these
+variables as service references. Do not use `localhost` in Railway: that points
+to the application container, not the managed database. The `preDeployCommand`
+runs `python -m app.storage.migrate` before each deployment.
 
 AI usage is recorded in each `agent_decision` event with input/output/total
 tokens, attempts, latency, and estimated cost. Each `consensus` event includes
@@ -65,7 +70,7 @@ This read-only endpoint reports the running app version, Railway commit/deployme
 identifiers, safe runtime mode, and whether token/cost audit logging is present.
 It never returns API keys or other secrets.
 
-The current runtime stores audit data in local SQLite (`crypto.db`) and paper checkpoints in `paper_state.json`. Railway ephemeral storage can be reset on redeploy; use PostgreSQL wiring before relying on historical audit retention.
+Audit events are stored in the PostgreSQL database referenced by `DATABASE_URL`, including agent decisions, consensus, paper ticks, token usage, and estimated costs. PostgreSQL must be provisioned in the Railway project and its reference URL assigned to `DATABASE_URL`; audit history then survives redeploys. Paper checkpoints remain in `paper_state.json` unless a persistent volume or database-backed state is added.
 
 ## GitHub connection
 

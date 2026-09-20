@@ -57,3 +57,12 @@ Useful endpoints:
 - `/api/status` for worker status.
 - `/api/kill-switch` to stop the paper worker.
 "# Future_V2" 
+
+
+## Durable audit storage
+
+When `DATABASE_URL` starts with `postgresql`, audit events are stored in
+PostgreSQL instead of local `crypto.db`. This preserves paper ticks, agent
+decisions, consensus, token usage, costs, and setup history across Railway
+redeploys. For Railway, use service references such as
+`${{Postgres.DATABASE_URL}}`; do not use `localhost`.

@@ -15,7 +15,7 @@ from app.market_data.service import Snapshot, candles_frame, validate_snapshot
 from app.orchestrator import Orchestrator
 from app.risk.state import RiskState
 from app.storage.json_store import JsonStore
-from app.storage.repository import AuditRepository
+from app.storage.repository import repository_from_url
 from app.strategy import signal
 
 log = logging.getLogger(__name__)
@@ -25,7 +25,7 @@ class PaperWorker:
         if settings.trading_mode != TradingMode.paper:
             raise ValueError("PaperWorker can only run in paper mode")
         self.settings, self.interval, self.running = settings, interval_seconds, False
-        self.client, self.audit = OKXClient(demo=False), AuditRepository()
+        self.client, self.audit = OKXClient(demo=False), repository_from_url(settings.database_url)
         self.state_store = JsonStore()
         self.broker = PaperBroker.restore(self.state_store.load({}))
         self.risk_state = RiskState(self.broker.cash, self.broker.cash)
@@ -79,10 +79,11 @@ class PaperWorker:
                     def audit_agent_decision(decision_event):
                         decision_event["called_at"] = datetime.fromtimestamp(decision_event["ts"], UTC).isoformat(timespec="milliseconds")
                         ai_audit_events.append(decision_event)
-                        self.audit.append("agent_decision", decision_event)
                         log.info("agent_decision", extra=decision_event)
 
                     consensus = await self.orchestrator.decision(agent_snapshot, audit_agent_decision)
+                    for decision_event in ai_audit_events:
+                        await self.audit.append("agent_decision", decision_event)
                     self.last_ai_advisory_at[symbol] = time.time()
                     event["agent_consensus"] = {"action":consensus.action,"score":consensus.score,"approved":consensus.approved,"reason_codes":consensus.reason_codes}
                     consensus_event = consensus.model_dump()
@@ -94,12 +95,12 @@ class PaperWorker:
                         "estimated_cost_usd": round(sum(item.get("estimated_cost_usd", 0.0) for item in ai_audit_events), 10),
                         "model": self.settings.openai_model,
                     }
-                    self.audit.append("consensus", consensus_event)
+                    await self.audit.append("consensus", consensus_event)
                 else:
                     event["agent_consensus"] = {"action":"hold","score":0,"approved":False,"reason_codes":[ai_reason],"skipped":True}
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
             event = {"symbol": symbol, "action": "hold", "reason": "market_data_error", "error_type": type(exc).__name__}
-        self.audit.append("paper_tick", event)
+        await self.audit.append("paper_tick", event)
         self.risk_state.peak_equity=max(self.risk_state.peak_equity,self.broker.cash)
         self.state_store.save(self.broker.snapshot())
         log.info("paper_tick", extra=event)

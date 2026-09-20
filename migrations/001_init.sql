@@ -1,3 +1,6 @@
+CREATE TABLE IF NOT EXISTS audit_events(id BIGSERIAL PRIMARY KEY, kind TEXT NOT NULL, payload JSONB NOT NULL, ts DOUBLE PRECISION NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS idx_audit_events_ts ON audit_events(ts DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_events_kind_ts ON audit_events(kind, ts DESC);
 CREATE TABLE IF NOT EXISTS system_events(id BIGSERIAL PRIMARY KEY, kind TEXT NOT NULL, payload JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS market_candles(symbol TEXT, timeframe TEXT, ts TIMESTAMPTZ, open NUMERIC, high NUMERIC, low NUMERIC, close NUMERIC, volume NUMERIC, PRIMARY KEY(symbol,timeframe,ts));
 CREATE TABLE IF NOT EXISTS agent_decisions(id BIGSERIAL PRIMARY KEY, decision JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());

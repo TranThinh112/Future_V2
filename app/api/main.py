@@ -14,7 +14,7 @@ from app.api.metrics import install_metrics
 from app.config import Settings, TradingMode
 from app.monitoring import configure_logging, install_tracing
 from app.paper_worker import PaperWorker
-from app.storage.repository import AuditRepository
+from app.storage.repository import repository_from_url
 
 worker: PaperWorker | None = None
 worker_task = None
@@ -47,15 +47,28 @@ def root():
 @app.get("/health")
 def health(): requests.inc(); return {"status":"ok","mode":Settings().trading_mode,"paper_worker":bool(worker and worker.running)}
 @app.get("/api/events")
-def events(limit: int = 20):
-    return AuditRepository().recent(max(1, min(limit, 100)))
+async def events(limit: int = 20):
+    repository = repository_from_url(settings.database_url)
+    try:
+        return await repository.recent(max(1, min(limit, 100)))
+    finally:
+        await repository.close()
 @app.get("/api/status")
-def status():
-    recent = AuditRepository().recent(1)
+async def status():
+    repository = repository_from_url(settings.database_url)
+    try:
+        recent = await repository.recent(1)
+    finally:
+        await repository.close()
     return {"mode":Settings().trading_mode,"worker_running":bool(worker and worker.running),"last_event":recent[0] if recent else None}
 @app.get("/api/consensus")
-def consensus(limit: int = 20):
-    return [row for row in AuditRepository().recent(max(1, min(limit,100))) if row["kind"] == "consensus"]
+async def consensus(limit: int = 20):
+    repository = repository_from_url(settings.database_url)
+    try:
+        recent = await repository.recent(max(1, min(limit, 100)))
+    finally:
+        await repository.close()
+    return [row for row in recent if row["kind"] == "consensus"]
 @app.get("/api/portfolio")
 def portfolio():
     if not worker: return {"available":False}
