@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import math
 
 import httpx
 from pydantic import ValidationError
@@ -34,6 +35,21 @@ def _response_text(data):
                 return content["text"]
     return ""
 
+def _number(value, default=0.0):
+    try:
+        number = float(value)
+        return number if math.isfinite(number) else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _optional_number(value):
+    if value is None or value == "":
+        return None
+    number = _number(value, float("nan"))
+    return number if math.isfinite(number) else None
+
+
 def _normalize_decision(raw_text, agent_name, snapshot):
     payload = json.loads(raw_text)
     if not isinstance(payload, dict):
@@ -41,37 +57,54 @@ def _normalize_decision(raw_text, agent_name, snapshot):
     action = str(payload.get("action", "hold")).lower()
     if action not in {"buy", "sell", "hold", "reduce", "emergency_exit"}:
         action = "hold"
+    time_horizon = str(payload.get("time_horizon", "15m"))
+    if time_horizon not in {"5m", "15m", "1h"}:
+        time_horizon = "15m"
+    data_quality = str(payload.get("data_quality", "degraded"))
+    if data_quality not in {"good", "degraded", "bad"}:
+        data_quality = "degraded"
+    confidence = min(1.0, max(0.0, _number(payload.get("confidence"), 0.0)))
+    suggested_position_pct = min(1.0, max(0.0, _number(payload.get("suggested_position_pct"), 0.0)))
     reason_codes = payload.get("reason_codes", ["model_output"])
     invalidators = payload.get("invalidators", [])
     if isinstance(reason_codes, str):
         reason_codes = [reason_codes]
+    elif not isinstance(reason_codes, list):
+        reason_codes = ["model_output"]
+    reason_codes = [str(code) for code in reason_codes if code is not None] or ["model_output"]
     if isinstance(invalidators, str):
         invalidators = [invalidators]
+    elif not isinstance(invalidators, list):
+        invalidators = []
+    invalidators = [str(value) for value in invalidators if value is not None]
     payload.update({
         "agent_name": agent_name,
         "symbol": snapshot.get("symbol", ""),
         "action": action,
-        "time_horizon": payload.get("time_horizon", "15m"),
-        "entry_price": payload.get("entry_price"),
-        "stop_loss_price": payload.get("stop_loss_price"),
-        "take_profit_price": payload.get("take_profit_price"),
-        "suggested_position_pct": payload.get("suggested_position_pct", 0),
+        "confidence": confidence,
+        "time_horizon": time_horizon,
+        "entry_price": _optional_number(payload.get("entry_price")),
+        "stop_loss_price": _optional_number(payload.get("stop_loss_price")),
+        "take_profit_price": _optional_number(payload.get("take_profit_price")),
+        "suggested_position_pct": suggested_position_pct,
         "reason_codes": reason_codes,
         "invalidators": invalidators,
-        "data_quality": payload.get("data_quality", snapshot.get("data_quality", "degraded")),
-        "veto": payload.get("veto", False),
+        "data_quality": data_quality,
+        "veto": payload.get("veto") is True,
     })
     return AgentDecision.model_validate(payload)
 
 class OpenAIAgent:
     def __init__(self, name, api_key, model="gpt-5.4-mini", timeout=20, retries=2,
-                 input_cost_per_million=0.0, output_cost_per_million=0.0):
+                 input_cost_per_million=0.75, output_cost_per_million=4.50):
         self.name=name; self.key=api_key; self.model=model; self.timeout=timeout; self.retries=retries
         self.input_cost_per_million = input_cost_per_million
         self.output_cost_per_million = output_cost_per_million
         self.last_usage = {}
         self.last_cost_usd = 0.0
         self.last_attempts = 0
+        self.last_error = ""
+        self.last_response_preview = ""
 
     def _record_usage(self, usage):
         usage = usage if isinstance(usage, dict) else {}
@@ -93,6 +126,8 @@ class OpenAIAgent:
         self.last_usage = {}
         self.last_cost_usd = 0.0
         self.last_attempts = 0
+        self.last_error = ""
+        self.last_response_preview = ""
         if not self.key: return hold(self.name,snapshot.get("symbol",""),"openai_key_missing")
         safe_snapshot = sanitize_snapshot(snapshot)
         payload={"model":self.model,"input":[{"role":"system","content":PROMPTS[self.name]+SYSTEM_SUFFIX},{"role":"user","content":json.dumps(safe_snapshot,separators=(",",":"))}],"text":{"format":{"type":"json_object"}},"store":False}
@@ -107,6 +142,7 @@ class OpenAIAgent:
                 if usage:
                     log.info("openai_usage", extra={"agent": self.name, "model": self.model, "usage": usage})
                 text = _response_text(data)
+                self.last_response_preview = text[:500]
                 return _normalize_decision(text, self.name, snapshot)
             except (httpx.TimeoutException, TimeoutError) as exc:
                 last_error = exc
@@ -131,6 +167,10 @@ class OpenAIAgent:
             except ValidationError as exc:
                 last_error = exc
                 failure_reason = "openai_schema_error"
+                self.last_error = "; ".join(
+                    f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
+                    for error in exc.errors()
+                )
                 if attempt < self.retries:
                     await asyncio.sleep(min(4, 2**attempt))
             except (ValueError, KeyError, IndexError, TypeError) as exc:
@@ -138,5 +178,6 @@ class OpenAIAgent:
                 failure_reason = "openai_invalid_response"
                 if attempt < self.retries:
                     await asyncio.sleep(min(4, 2**attempt))
-        log.warning("openai_agent_hold", extra={"agent": self.name, "error": str(last_error)})
+        self.last_error = self.last_error or str(last_error)
+        log.warning("openai_agent_hold", extra={"agent": self.name, "error": self.last_error})
         return hold(self.name,snapshot.get("symbol",""),failure_reason)

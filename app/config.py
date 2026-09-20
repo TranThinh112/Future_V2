@@ -43,8 +43,8 @@ class Settings(BaseSettings):
     ai_advisory_cooldown_seconds: int = Field(900, ge=0)
     ai_advisory_on_hold: bool = False
     enable_paper_execution: bool = False
-    ai_input_cost_per_million: float = Field(0.0, ge=0)
-    ai_output_cost_per_million: float = Field(0.0, ge=0)
+    ai_input_cost_per_million: float = Field(0.75, ge=0)
+    ai_output_cost_per_million: float = Field(4.50, ge=0)
 
     @model_validator(mode="after")
     def guard_live(self):

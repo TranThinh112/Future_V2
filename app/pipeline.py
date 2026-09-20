@@ -36,5 +36,7 @@ async def analyze(snapshot, agents, on_agent_decision=None):
                 "total_tokens": usage.get("total_tokens", 0),
                 "estimated_cost_usd": getattr(agent, "last_cost_usd", 0.0) if agent else 0.0,
                 "attempts": getattr(agent, "last_attempts", 0) if agent else 0,
+                "validation_error": getattr(agent, "last_error", "") if agent else "",
+                "response_preview": getattr(agent, "last_response_preview", "") if agent else "",
             })
     return aggregate(votes, snapshot["symbol"])
