@@ -75,15 +75,26 @@ class PaperWorker:
                 should_call, ai_reason = self.should_call_ai(symbol, decision, time.time())
                 if should_call:
                     agent_snapshot = {"symbol":symbol,"last":snapshot.last,"bid":snapshot.bid,"ask":snapshot.ask,"spread_pct":spread,"features":{k:(float(v) if hasattr(v,"__float__") else v) for k,v in values.items() if k in ("ema20","ema50","rsi","macd","macd_signal","atr")}}
+                    ai_audit_events = []
                     def audit_agent_decision(decision_event):
                         decision_event["called_at"] = datetime.fromtimestamp(decision_event["ts"], UTC).isoformat(timespec="milliseconds")
+                        ai_audit_events.append(decision_event)
                         self.audit.append("agent_decision", decision_event)
                         log.info("agent_decision", extra=decision_event)
 
                     consensus = await self.orchestrator.decision(agent_snapshot, audit_agent_decision)
                     self.last_ai_advisory_at[symbol] = time.time()
                     event["agent_consensus"] = {"action":consensus.action,"score":consensus.score,"approved":consensus.approved,"reason_codes":consensus.reason_codes}
-                    self.audit.append("consensus", consensus.model_dump())
+                    consensus_event = consensus.model_dump()
+                    consensus_event["ai_usage"] = {
+                        "agent_count": len(ai_audit_events),
+                        "input_tokens": sum(item.get("input_tokens", 0) for item in ai_audit_events),
+                        "output_tokens": sum(item.get("output_tokens", 0) for item in ai_audit_events),
+                        "total_tokens": sum(item.get("total_tokens", 0) for item in ai_audit_events),
+                        "estimated_cost_usd": round(sum(item.get("estimated_cost_usd", 0.0) for item in ai_audit_events), 10),
+                        "model": self.settings.openai_model,
+                    }
+                    self.audit.append("consensus", consensus_event)
                 else:
                     event["agent_consensus"] = {"action":"hold","score":0,"approved":False,"reason_codes":[ai_reason],"skipped":True}
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:

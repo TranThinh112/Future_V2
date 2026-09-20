@@ -15,4 +15,5 @@ def test_orchestrator_emits_agent_audit_events():
     assert len(events) == 8
     assert {event["agent_name"] for event in events} == {"TIDAL", "NORO", "LUMEN", "ZEPHR", "OKAPI", "RUNE", "VESKA", "MARIN"}
     assert all("latency_ms" in event and event["symbol"] == "BTC-USDT" for event in events)
+    assert all("input_tokens" in event and "estimated_cost_usd" in event for event in events)
     assert len(result.votes) == 8

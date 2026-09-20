@@ -55,9 +55,39 @@ def test_agent_retries_then_validates_json(monkeypatch):
             return FakeResponse()
 
     monkeypatch.setattr("app.agents.openai_adapter.httpx.AsyncClient", FakeClient)
-    decision = asyncio.run(OpenAIAgent("NORO", "key", retries=1).decide({"symbol": "BTC-USDT", "api_key": "secret"}))
+    agent = OpenAIAgent("NORO", "key", retries=1, input_cost_per_million=1, output_cost_per_million=2)
+    decision = asyncio.run(agent.decide({"symbol": "BTC-USDT", "api_key": "secret"}))
     assert calls["count"] == 2
     assert decision.agent_name == "NORO"
     user_content = calls["payloads"][-1]["input"][1]["content"]
     assert "api_key" not in user_content
     assert "secret" not in user_content
+    assert agent.last_usage == {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+    assert agent.last_cost_usd == 0.000003
+
+def test_agent_timeout_is_classified(monkeypatch):
+    class FakeClient:
+        def __init__(self, timeout): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, exc_type, exc, tb): return None
+        async def post(self, url, headers, json):
+            raise TimeoutError("timed out")
+
+    monkeypatch.setattr("app.agents.openai_adapter.httpx.AsyncClient", FakeClient)
+    decision = asyncio.run(OpenAIAgent("VESKA", "key", retries=0).decide({"symbol": "ETH-USDT"}))
+    assert decision.reason_codes == ["openai_timeout"]
+
+def test_agent_invalid_json_is_classified(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self): return None
+        def json(self): return {"output_text": "{not-json"}
+
+    class FakeClient:
+        def __init__(self, timeout): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, exc_type, exc, tb): return None
+        async def post(self, url, headers, json): return FakeResponse()
+
+    monkeypatch.setattr("app.agents.openai_adapter.httpx.AsyncClient", FakeClient)
+    decision = asyncio.run(OpenAIAgent("VESKA", "key", retries=0).decide({"symbol": "ETH-USDT"}))
+    assert decision.reason_codes == ["openai_invalid_json"]

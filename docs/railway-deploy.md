@@ -29,9 +29,17 @@ Required runtime variables:
 OPENAI_MODEL=gpt-5.4-mini
 DATABASE_URL=<Railway PostgreSQL connection string>
 REDIS_URL=<Railway Redis connection string>
+AI_INPUT_COST_PER_MILLION=<model input price in USD per 1M tokens>
+AI_OUTPUT_COST_PER_MILLION=<model output price in USD per 1M tokens>
 ```
 
 Do not commit `.env` or put real secret values in `.env.example`.
+
+AI usage is recorded in each `agent_decision` event with input/output/total
+tokens, attempts, latency, and estimated cost. Each `consensus` event includes
+the totals for all agents in that call. Set the two AI cost variables using the
+current official pricing for the selected model; leaving them at `0.0` records
+tokens but reports zero estimated cost.
 
 ## Runtime
 
