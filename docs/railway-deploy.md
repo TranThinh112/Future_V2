@@ -2,7 +2,7 @@
 
 ## Safety defaults
 
-Set these Railway variables before running the service:
+Set these Railway variables before running the service. Enter them in Railway after connecting the GitHub repository.
 
 ```env
 TRADING_MODE=paper
@@ -14,7 +14,24 @@ AI_ADVISORY_COOLDOWN_SECONDS=900
 OKX_DEMO_TRADING=false
 ```
 
-`OPENAI_API_KEY`, `OKX_API_KEY`, `OKX_SECRET_KEY`, and `OKX_PASSPHRASE` must be configured as Railway service variables. Do not commit `.env`.
+Required secret variables:
+
+```env
+OKX_API_KEY=
+OKX_SECRET_KEY=
+OKX_PASSPHRASE=
+OPENAI_API_KEY=
+```
+
+Required runtime variables:
+
+```env
+OPENAI_MODEL=gpt-5.4-mini
+DATABASE_URL=<Railway PostgreSQL connection string>
+REDIS_URL=<Railway Redis connection string>
+```
+
+Do not commit `.env` or put real secret values in `.env.example`.
 
 ## Runtime
 
@@ -31,3 +48,14 @@ Healthcheck:
 ```
 
 The current runtime stores audit data in local SQLite (`crypto.db`) and paper checkpoints in `paper_state.json`. Railway ephemeral storage can be reset on redeploy; use PostgreSQL wiring before relying on historical audit retention.
+
+## GitHub connection
+
+1. Push this repository to GitHub.
+2. In Railway, create a new project from the GitHub repository.
+3. Select the repository root as the service root.
+4. Railway detects `Dockerfile` and `railway.json`.
+5. Add the variables above in the service's Variables tab.
+6. Generate a domain and verify `/health`.
+
+Keep `ENABLE_LIVE_TRADING=false` and `ENABLE_PAPER_EXECUTION=false` while validating the deployment.
