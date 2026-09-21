@@ -31,6 +31,8 @@ class PaperWorker:
         self.risk_state = RiskState(self.broker.cash, self.broker.cash)
         self.orchestrator = Orchestrator(settings)
         self.last_ai_advisory_at: dict[str, float] = {}
+        self.last_tick_at = 0.0
+        self.last_error = ""
 
     def should_call_ai(self, symbol: str, decision: dict, now: float) -> tuple[bool, str]:
         if not self.settings.enable_ai_advisory:
@@ -101,6 +103,8 @@ class PaperWorker:
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
             event = {"symbol": symbol, "action": "hold", "reason": "market_data_error", "error_type": type(exc).__name__}
         await self.audit.append("paper_tick", event)
+        self.last_tick_at = time.time()
+        self.last_error = ""
         self.risk_state.peak_equity=max(self.risk_state.peak_equity,self.broker.cash)
         self.state_store.save(self.broker.snapshot())
         log.info("paper_tick", extra=event)
@@ -108,8 +112,21 @@ class PaperWorker:
 
     async def run(self):
         self.running = True
-        while self.running:
-            await asyncio.gather(*(self.tick(s) for s in self.settings.allowed_symbols))
-            await asyncio.sleep(self.interval)
+        try:
+            while self.running:
+                await asyncio.gather(*(self.tick(symbol) for symbol in self.settings.allowed_symbols))
+                await asyncio.sleep(self.interval)
+        except Exception as exc:
+            self.running = False
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            log.exception("paper_worker_crashed")
+            raise
+        finally:
+            close = getattr(self.audit, "close", None)
+            if close:
+                await close()
+
+    def healthy(self, max_stale_seconds: int = 120) -> bool:
+        return self.running and self.last_tick_at > 0 and time.time() - self.last_tick_at <= max_stale_seconds
 
     def stop(self): self.running = False

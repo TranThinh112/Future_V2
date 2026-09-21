@@ -45,7 +45,10 @@ def root():
 :root{{--ink:#13221e;--cream:#f4f0e5;--mint:#c7e3cb;--orange:#ef7545;--line:#17382e}}*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;background:radial-gradient(circle at 85% 8%,#f9b888 0 10%,transparent 29%),linear-gradient(130deg,#d6ead5,#f4f0e5 55%,#c4ddd0);color:var(--ink);font-family:"DM Mono",monospace}}main{{max-width:1060px;margin:auto;padding:9vh 28px}}header{{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid var(--line);padding-bottom:28px}}h1{{font:700 clamp(2.6rem,8vw,6.8rem)/.85 Fraunces,serif;letter-spacing:-.075em;margin:0;max-width:680px}}.eyebrow,.label{{font-size:.72rem;letter-spacing:.12em;text-transform:uppercase}}.pill{{background:var(--ink);color:#e8f2e5;border-radius:99px;padding:9px 12px;margin-top:5px}}section{{display:grid;grid-template-columns:1.1fr .9fr;gap:18px;margin-top:24px}}.card{{border:2px solid var(--line);padding:25px;min-height:190px;background:#f8f4ea99}}.status{{background:var(--mint)}}.state{{font:700 3.2rem Fraunces,serif;margin:18px 0 8px}}.paper{{color:#196649}}a{{color:var(--ink);font-weight:500;text-underline-offset:4px}}.notice{{border-left:5px solid var(--orange);padding-left:14px;line-height:1.6}}@media(max-width:650px){{header{{display:block}}section{{grid-template-columns:1fr}}h1{{margin-top:22px}}}}
 </style></head><body><main><header><div><p class="eyebrow">OKX Spot / Multi-agent desk</p><h1>Crypto<br>Agent Bot</h1></div><div class="pill">SYSTEM ONLINE</div></header><section><article class="card status"><p class="label">Trading posture</p><div class="state paper">{mode.value.upper()}</div><p>BTC-USDT and ETH-USDT only. The bot fails closed: uncertain data becomes HOLD.</p></article><article class="card"><p class="label">Control room</p><p><a href="/docs">Open API documentation</a></p><p><a href="/health">View machine health</a></p><p class="notice">Live trading remains disabled. No real order can be submitted from this dashboard.</p></article></section></main></body></html>''')
 @app.get("/health")
-def health(): requests.inc(); return {"status":"ok","mode":Settings().trading_mode,"paper_worker":bool(worker and worker.running)}
+def health():
+    requests.inc()
+    worker_healthy = bool(worker and worker.healthy())
+    return {"status":"ok" if worker_healthy else "degraded","mode":Settings().trading_mode,"paper_worker":worker_healthy,"worker_running":bool(worker and worker.running),"last_tick_at":getattr(worker,"last_tick_at",0),"worker_error":getattr(worker,"last_error","")}
 @app.get("/api/events")
 async def events(limit: int = 20):
     repository = repository_from_url(settings.database_url)
@@ -60,7 +63,7 @@ async def status():
         recent = await repository.recent(1)
     finally:
         await repository.close()
-    return {"mode":Settings().trading_mode,"worker_running":bool(worker and worker.running),"last_event":recent[0] if recent else None}
+    return {"mode":Settings().trading_mode,"worker_running":bool(worker and worker.running),"worker_healthy":bool(worker and worker.healthy()),"last_tick_at":getattr(worker,"last_tick_at",0),"worker_error":getattr(worker,"last_error",""),"last_event":recent[0] if recent else None}
 @app.get("/api/consensus")
 async def consensus(limit: int = 20):
     repository = repository_from_url(settings.database_url)

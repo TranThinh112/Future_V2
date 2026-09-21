@@ -65,48 +65,54 @@ class PostgresAuditRepository:
 
     def __init__(self, database_url: str):
         self.database_url = _postgres_url(database_url)
-        self.connection = None
+        self.pool = None
 
     async def connect(self):
-        if self.connection is None:
+        if self.pool is None:
             try:
                 import asyncpg
             except ImportError as error:
                 raise RuntimeError("asyncpg is required for PostgreSQL audit storage") from error
-            self.connection = await asyncpg.connect(self.database_url)
-            await self.connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS audit_events(
-                    id BIGSERIAL PRIMARY KEY,
-                    kind TEXT NOT NULL,
-                    payload JSONB NOT NULL,
-                    ts DOUBLE PRECISION NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-                )
-                """
-            )
-            await self.connection.execute(
-                "CREATE INDEX IF NOT EXISTS idx_audit_events_ts ON audit_events(ts DESC)"
-            )
-            await self.connection.execute(
-                "CREATE INDEX IF NOT EXISTS idx_audit_events_kind_ts ON audit_events(kind, ts DESC)"
-            )
+            self.pool = await asyncpg.create_pool(self.database_url, min_size=1, max_size=5)
+            async with self.pool.acquire() as connection:
+                await self._ensure_schema(connection)
         return self
+
+    async def _ensure_schema(self, connection):
+        await connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS audit_events(
+                id BIGSERIAL PRIMARY KEY,
+                kind TEXT NOT NULL,
+                payload JSONB NOT NULL,
+                ts DOUBLE PRECISION NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """
+        )
+        await connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_events_ts ON audit_events(ts DESC)"
+        )
+        await connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_events_kind_ts ON audit_events(kind, ts DESC)"
+        )
 
     async def append(self, kind: str, payload: dict[str, Any]):
         await self.connect()
-        await self.connection.execute(
-            "INSERT INTO audit_events(kind, payload, ts) VALUES($1, $2::jsonb, $3)",
-            kind,
-            json.dumps(payload),
-            time.time(),
-        )
+        async with self.pool.acquire() as connection:
+            await connection.execute(
+                "INSERT INTO audit_events(kind, payload, ts) VALUES($1, $2::jsonb, $3)",
+                kind,
+                json.dumps(payload, default=str),
+                time.time(),
+            )
 
     async def recent(self, limit: int = 20):
         await self.connect()
-        rows = await self.connection.fetch(
-            "SELECT kind, payload, ts FROM audit_events ORDER BY ts DESC LIMIT $1", limit
-        )
+        async with self.pool.acquire() as connection:
+            rows = await connection.fetch(
+                "SELECT kind, payload, ts FROM audit_events ORDER BY ts DESC LIMIT $1", limit
+            )
         return [
             {
                 "kind": row["kind"],
@@ -119,10 +125,9 @@ class PostgresAuditRepository:
         ]
 
     async def close(self):
-        if self.connection is not None:
-            await self.connection.close()
-            self.connection = None
-
+        if self.pool is not None:
+            await self.pool.close()
+            self.pool = None
 
 def repository_from_url(database_url: str | None = None):
     url = database_url or os.getenv("DATABASE_URL", "")
