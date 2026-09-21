@@ -10,6 +10,49 @@ def _postgres_url(url: str) -> str:
     return url.replace("postgresql+asyncpg://", "postgresql://", 1)
 
 
+def summarize(rows: list[dict]) -> dict:
+    """Aggregate AI token/cost totals and per-agent usage from audit rows."""
+    totals = {"rounds": 0, "agent_calls": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "estimated_cost_usd": 0.0}
+    recent_window = {"rounds": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "estimated_cost_usd": 0.0}
+    window_start = time.time() - 86400
+    agents: dict[str, dict] = {}
+    for row in rows:
+        payload = row.get("payload") or {}
+        if row.get("kind") == "consensus":
+            usage = payload.get("ai_usage") or {}
+            totals["rounds"] += 1
+            totals["agent_calls"] += int(usage.get("agent_count") or 0)
+            totals["input_tokens"] += int(usage.get("input_tokens") or 0)
+            totals["output_tokens"] += int(usage.get("output_tokens") or 0)
+            totals["total_tokens"] += int(usage.get("total_tokens") or 0)
+            totals["estimated_cost_usd"] += float(usage.get("estimated_cost_usd") or 0)
+            if (row.get("timestamp") or 0) >= window_start:
+                recent_window["rounds"] += 1
+                recent_window["input_tokens"] += int(usage.get("input_tokens") or 0)
+                recent_window["output_tokens"] += int(usage.get("output_tokens") or 0)
+                recent_window["total_tokens"] += int(usage.get("total_tokens") or 0)
+                recent_window["estimated_cost_usd"] += float(usage.get("estimated_cost_usd") or 0)
+        elif row.get("kind") == "agent_decision":
+            name = str(payload.get("agent_name") or "unknown")
+            entry = agents.setdefault(name, {
+                "agent": name, "calls": 0, "input_tokens": 0, "output_tokens": 0,
+                "total_tokens": 0, "estimated_cost_usd": 0.0, "fallback_calls": 0, "veto_calls": 0,
+            })
+            entry["calls"] += 1
+            entry["input_tokens"] += int(payload.get("input_tokens") or 0)
+            entry["output_tokens"] += int(payload.get("output_tokens") or 0)
+            entry["total_tokens"] += int(payload.get("total_tokens") or 0)
+            entry["estimated_cost_usd"] += float(payload.get("estimated_cost_usd") or 0)
+            if payload.get("status") and payload["status"] != "ok":
+                entry["fallback_calls"] += 1
+            if payload.get("veto"):
+                entry["veto_calls"] += 1
+    totals["estimated_cost_usd"] = round(totals["estimated_cost_usd"], 10)
+    recent_window["estimated_cost_usd"] = round(recent_window["estimated_cost_usd"], 10)
+    for entry in agents.values():
+        entry["estimated_cost_usd"] = round(entry["estimated_cost_usd"], 10)
+    return {"totals": totals, "last_24h": recent_window, "agents": [agents[name] for name in sorted(agents)]}
+
 class AuditRepository:
     """SQLite audit repository retained for local tests and explicit file paths."""
 
@@ -66,6 +109,12 @@ class AsyncSQLiteAuditRepository:
     async def cleanup(self, retention_days=30):
         return None
 
+
+    async def summary(self, limit=2000):
+        return summarize(self.repository.recent(limit))
+
+    async def market_scan_hourly(self, limit=48):
+        return []
 
 class PostgresAuditRepository:
     """Durable audit repository backed by Railway PostgreSQL."""
@@ -249,6 +298,104 @@ class PostgresAuditRepository:
         if self.pool is not None:
             await self.pool.close()
             self.pool = None
+
+    async def summary(self):
+        await self.connect()
+        async with self.pool.acquire() as connection:
+            row = await connection.fetchrow(
+                """
+                WITH windowed AS (
+                    SELECT payload, ts, ts >= extract(epoch FROM now() - interval '24 hours') AS in_window
+                    FROM audit_events WHERE kind = 'consensus'
+                ), totals AS (
+                    SELECT
+                        count(*)::int AS rounds,
+                        COALESCE(sum(NULLIF(payload->'ai_usage'->>'agent_count','')::int), 0)::int AS agent_calls,
+                        COALESCE(sum(NULLIF(payload->'ai_usage'->>'input_tokens','')::bigint), 0)::bigint AS input_tokens,
+                        COALESCE(sum(NULLIF(payload->'ai_usage'->>'output_tokens','')::bigint), 0)::bigint AS output_tokens,
+                        COALESCE(sum(NULLIF(payload->'ai_usage'->>'total_tokens','')::bigint), 0)::bigint AS total_tokens,
+                        COALESCE(sum(NULLIF(payload->'ai_usage'->>'estimated_cost_usd','')::double precision), 0)::double precision AS estimated_cost_usd
+                    FROM windowed
+                ), recent AS (
+                    SELECT
+                        count(*)::int AS rounds,
+                        COALESCE(sum(NULLIF(payload->'ai_usage'->>'input_tokens','')::bigint), 0)::bigint AS input_tokens,
+                        COALESCE(sum(NULLIF(payload->'ai_usage'->>'output_tokens','')::bigint), 0)::bigint AS output_tokens,
+                        COALESCE(sum(NULLIF(payload->'ai_usage'->>'total_tokens','')::bigint), 0)::bigint AS total_tokens,
+                        COALESCE(sum(NULLIF(payload->'ai_usage'->>'estimated_cost_usd','')::double precision), 0)::double precision AS estimated_cost_usd
+                    FROM windowed WHERE in_window
+                ), per_agent AS (
+                    SELECT COALESCE(jsonb_agg(entry ORDER BY entry->>'agent'), '[]'::jsonb) AS rows FROM (
+                        SELECT jsonb_build_object(
+                            'agent', COALESCE(payload->>'agent_name', 'unknown'),
+                            'calls', count(*)::int,
+                            'input_tokens', COALESCE(sum(NULLIF(payload->>'input_tokens','')::bigint), 0),
+                            'output_tokens', COALESCE(sum(NULLIF(payload->>'output_tokens','')::bigint), 0),
+                            'total_tokens', COALESCE(sum(NULLIF(payload->>'total_tokens','')::bigint), 0),
+                            'estimated_cost_usd', COALESCE(sum(NULLIF(payload->>'estimated_cost_usd','')::double precision), 0),
+                            'fallback_calls', count(*) FILTER (WHERE COALESCE(payload->>'status', 'ok') <> 'ok')::int,
+                            'veto_calls', count(*) FILTER (WHERE COALESCE((payload->>'veto')::boolean, false))::int
+                        ) AS entry
+                        FROM audit_events
+                        WHERE kind = 'agent_decision'
+                        GROUP BY COALESCE(payload->>'agent_name', 'unknown')
+                    ) grouped
+                )
+                SELECT
+                    (SELECT row_to_json(totals) FROM totals) AS totals,
+                    (SELECT row_to_json(recent) FROM recent) AS last_24h,
+                    (SELECT rows FROM per_agent) AS agents
+                """
+            )
+        decode = lambda value: json.loads(value) if isinstance(value, str) else value
+        totals = decode(row["totals"])
+        agents = decode(row["agents"])
+        recent = decode(row["last_24h"])
+        return {
+            "totals": {
+                "rounds": totals["rounds"],
+                "agent_calls": totals["agent_calls"],
+                "input_tokens": totals["input_tokens"],
+                "output_tokens": totals["output_tokens"],
+                "total_tokens": totals["total_tokens"],
+                "estimated_cost_usd": round(float(totals["estimated_cost_usd"] or 0), 10),
+            },
+            "last_24h": {
+                "rounds": recent["rounds"],
+                "input_tokens": recent["input_tokens"],
+                "output_tokens": recent["output_tokens"],
+                "total_tokens": recent["total_tokens"],
+                "estimated_cost_usd": round(float(recent["estimated_cost_usd"] or 0), 10),
+            },
+            "agents": [
+                {
+                    "agent": row["agent"],
+                    "calls": row["calls"],
+                    "input_tokens": row["input_tokens"],
+                    "output_tokens": row["output_tokens"],
+                    "total_tokens": row["total_tokens"],
+                    "estimated_cost_usd": round(float(row["estimated_cost_usd"] or 0), 10),
+                    "fallback_calls": row["fallback_calls"],
+                    "veto_calls": row["veto_calls"],
+                }
+                for row in agents
+            ],
+        }
+
+    async def market_scan_hourly(self, limit: int = 48):
+        await self.connect()
+        async with self.pool.acquire() as connection:
+            rows = await connection.fetch(
+                """
+                SELECT bucket_start, symbol, scans, buy_count, sell_count, hold_count,
+                       min_price, max_price, last_price, avg_rsi, ai_calls, ai_cost_usd
+                FROM market_scan_hourly
+                ORDER BY bucket_start DESC, symbol
+                LIMIT $1
+                """,
+                limit,
+            )
+        return [dict(row) for row in rows]
 
 def repository_from_url(database_url: str | None = None):
     url = database_url or os.getenv("DATABASE_URL", "")

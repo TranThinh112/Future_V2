@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     audit_paper_tick_sample_seconds: int = Field(300, ge=0)
     audit_paper_tick_retention_days: int = Field(30, ge=1)
     audit_cleanup_interval_seconds: int = Field(3600, ge=60)
+    news_provider_url: str = ""
+    news_api_key: str = ""
+    news_lookback_minutes: int = Field(180, ge=1, le=1440)
+    news_max_items: int = Field(10, ge=1, le=50)
 
     @model_validator(mode="after")
     def guard_live(self):

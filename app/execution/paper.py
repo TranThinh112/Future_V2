@@ -1,16 +1,17 @@
+import time
 from dataclasses import dataclass, field
 
 
 @dataclass
 class PaperPosition:
-    symbol: str; quantity: float; entry_price: float; stop_loss: float; take_profit: float
+    symbol: str; quantity: float; entry_price: float; stop_loss: float; take_profit: float; opened_at: float | None = None
 @dataclass
 class PaperBroker:
     cash: float = 10_000.0; fee_pct: float = .001; positions: dict[str, PaperPosition] = field(default_factory=dict); fills: list[dict] = field(default_factory=list)
     def buy(self, symbol, price, quantity, stop_loss, take_profit):
         cost=price*quantity*(1+self.fee_pct)
         if cost>self.cash or quantity<=0: return None
-        self.cash-=cost; position=PaperPosition(symbol,quantity,price,stop_loss,take_profit); self.positions[symbol]=position
+        self.cash-=cost; position=PaperPosition(symbol,quantity,price,stop_loss,take_profit,time.time()); self.positions[symbol]=position
         fill={"symbol":symbol,"side":"buy","price":price,"quantity":quantity,"fee":price*quantity*self.fee_pct}; self.fills.append(fill); return fill
     def mark(self, symbol, price):
         position=self.positions.get(symbol)

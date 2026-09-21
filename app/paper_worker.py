@@ -1,17 +1,22 @@
 """Safe paper worker: public market data only and no exchange order submission."""
 import asyncio
 import logging
+import math
 import time
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
+import numpy as np
 
 from app.config import Settings, TradingMode
 from app.execution.paper import PaperBroker
 from app.features.indicators import compute_features
 from app.market_data.okx import OKXClient
+from app.market_data.orderbook import estimated_slippage
 from app.market_data.service import Snapshot, candles_frame, validate_snapshot
+from app.news.service import NewsService
 from app.orchestrator import Orchestrator
 from app.risk.state import RiskState
 from app.storage.json_store import JsonStore
@@ -30,8 +35,15 @@ class PaperWorker:
         self.broker = PaperBroker.restore(self.state_store.load({}))
         self.risk_state = RiskState(self.broker.cash, self.broker.cash)
         self.orchestrator = Orchestrator(settings)
+        self.news = NewsService(
+            settings.news_provider_url,
+            settings.news_api_key,
+            settings.news_lookback_minutes,
+            settings.news_max_items,
+        )
         self.last_ai_advisory_at: dict[str, float] = {}
         self.last_audit_tick_at: dict[str, float] = {}
+        self.close_history: dict[str, list[float]] = {}
         self.last_cleanup_at = 0.0
         self.last_tick_at = 0.0
         self.last_error = ""
@@ -45,6 +57,388 @@ class PaperWorker:
         if now - last < self.settings.ai_advisory_cooldown_seconds:
             return False, "ai_advisory_cooldown"
         return True, "ai_advisory_allowed"
+
+    @staticmethod
+    def _finite(value):
+        try:
+            value = float(value)
+            return value if math.isfinite(value) else None
+        except (TypeError, ValueError):
+            return None
+
+    def _orderbook_context(self, response: dict, last: float) -> dict:
+        row = (response.get("data") or [{}])[0]
+        bids = row.get("bids") or []
+        asks = row.get("asks") or []
+        bid_depth = sum(self._finite(level[1]) or 0 for level in bids if len(level) >= 2)
+        ask_depth = sum(self._finite(level[1]) or 0 for level in asks if len(level) >= 2)
+        total_depth = bid_depth + ask_depth
+        quantity = self.broker.cash * self.settings.max_position_pct / max(last, 0.000001)
+        return {
+            "bid_depth_top20": bid_depth,
+            "ask_depth_top20": ask_depth,
+            "depth_imbalance": (bid_depth - ask_depth) / total_depth if total_depth else None,
+            "estimated_buy_slippage_pct": estimated_slippage(asks, quantity) if asks and quantity > 0 else None,
+            "estimated_sell_slippage_pct": estimated_slippage(bids, quantity) if bids and quantity > 0 else None,
+            "levels": {"bids": len(bids), "asks": len(asks)},
+            "data_quality": "good" if bids and asks else "missing",
+        }
+
+    def _portfolio_context(self, prices: dict[str, float]) -> dict:
+        equity = self.broker.equity(prices)
+        positions = {}
+        exposure = {}
+        now = time.time()
+        for symbol, position in self.broker.positions.items():
+            mark = prices.get(symbol, position.entry_price)
+            value = mark * position.quantity
+            opened_at = getattr(position, "opened_at", None)
+            positions[symbol] = {
+                "side": "long",
+                "quantity": position.quantity,
+                "entry_price": position.entry_price,
+                "mark_price": mark,
+                "position_value": value,
+                "unrealized_pnl": (mark - position.entry_price) * position.quantity,
+                "unrealized_pnl_pct": (mark / position.entry_price - 1) if position.entry_price else None,
+                "stop_loss": position.stop_loss,
+                "take_profit": position.take_profit,
+                "stop_distance_pct": (position.stop_loss / mark - 1) if mark and position.stop_loss else None,
+                "target_distance_pct": (position.take_profit / mark - 1) if mark and position.take_profit else None,
+                "opened_at": opened_at,
+                "age_seconds": round(now - opened_at, 3) if opened_at else None,
+                "liquidation_price": None,
+                "liquidation_note": "not_applicable_spot_paper",
+                "protection_status": "stop_loss_take_profit_configured",
+            }
+            exposure[symbol] = value / equity if equity else 0
+        return {
+            "cash": self.broker.cash,
+            "equity": equity,
+            "positions": positions,
+            "exposure_pct": exposure,
+            "total_exposure_pct": sum(exposure.values()),
+            "concentration_pct": max(exposure.values()) if exposure else 0,
+            "position_count": len(positions),
+            "correlation": self._correlation(),
+            "execution": self._fills_context(),
+            "data_quality": "good",
+        }
+
+    def _risk_context(self, equity: float, symbol: str, spread: float, slippage: float | None) -> dict:
+        return {
+            "risk_per_trade_pct": self.settings.risk_per_trade_pct,
+            "max_position_pct": self.settings.max_position_pct,
+            "max_total_exposure_pct": self.settings.max_total_exposure_pct,
+            "daily_loss_pct": self.risk_state.daily_loss(equity),
+            "drawdown_pct": self.risk_state.drawdown(equity),
+            "cooling_down": self.risk_state.cooling_down(symbol),
+            "spread_pct": spread,
+            "estimated_slippage_pct": slippage,
+            "api_healthy": True,
+            "liquidity_ok": slippage is None or slippage <= self.settings.max_slippage_pct,
+            "data_quality": "good",
+        }
+
+    @classmethod
+    def _regime_context(cls, values: dict) -> dict:
+        close = cls._finite(values.get("close"))
+        ema20, ema50, ema200 = (cls._finite(values.get(key)) for key in ("ema20", "ema50", "ema200"))
+        rsi, macd, macd_signal = (cls._finite(values.get(key)) for key in ("rsi", "macd", "macd_signal"))
+        atr, volatility = cls._finite(values.get("atr")), cls._finite(values.get("volatility"))
+        trend = "unknown"
+        if None not in (close, ema20, ema50, ema200):
+            if close > ema20 > ema50 > ema200:
+                trend = "strong_uptrend"
+            elif close > ema20 > ema50:
+                trend = "uptrend"
+            elif close < ema20 < ema50 < ema200:
+                trend = "strong_downtrend"
+            elif close < ema20 < ema50:
+                trend = "downtrend"
+            else:
+                trend = "range"
+        momentum = "unknown"
+        if None not in (rsi, macd, macd_signal):
+            if rsi >= 60 and macd > macd_signal:
+                momentum = "bullish"
+            elif rsi <= 40 and macd < macd_signal:
+                momentum = "bearish"
+            else:
+                momentum = "neutral"
+        volatility_regime = "unknown"
+        if volatility is not None:
+            volatility_regime = "high" if volatility > 0.004 else "low" if volatility < 0.001 else "normal"
+        known = trend != "unknown" and momentum != "unknown"
+        return {
+            "trend": trend,
+            "momentum": momentum,
+            "volatility": volatility_regime,
+            "atr_pct": (atr / close) if atr is not None and close else None,
+            "rsi_zone": "overbought" if rsi is not None and rsi > 70 else "oversold" if rsi is not None and rsi < 30 else "neutral",
+            "data_quality": "good" if known else "missing",
+        }
+
+    def _structure_context(self, candles, snapshot, values: dict) -> dict:
+        empty = {
+            "vwap": None, "vwap_deviation_pct": None, "bollinger_position_pct": None,
+            "support": None, "resistance": None, "distance_to_support_pct": None,
+            "distance_to_resistance_pct": None, "range_high": None, "range_low": None,
+            "lookback_candles": 0, "data_quality": "missing",
+        }
+        if candles is None or candles.empty:
+            return empty
+        last = self._finite(snapshot.last)
+        close, volume = candles["close"].astype(float), candles["volume"].astype(float)
+        total_volume = float(volume.sum())
+        vwap = float((close * volume).sum() / total_volume) if total_volume > 0 else None
+        recent, window = candles.tail(20), candles.tail(100)
+        support, resistance = float(recent["low"].min()), float(recent["high"].max())
+        bb_upper, bb_lower = self._finite(values.get("bb_upper")), self._finite(values.get("bb_lower"))
+        bollinger_position = None
+        if None not in (bb_upper, bb_lower, last) and bb_upper > bb_lower:
+            bollinger_position = (last - bb_lower) / (bb_upper - bb_lower)
+        return {
+            "vwap": vwap,
+            "vwap_deviation_pct": ((last - vwap) / vwap) if vwap and last else None,
+            "bollinger_position_pct": bollinger_position,
+            "support": support,
+            "resistance": resistance,
+            "distance_to_support_pct": ((last - support) / last) if last and support else None,
+            "distance_to_resistance_pct": ((resistance - last) / last) if last and resistance else None,
+            "range_high": float(window["high"].max()),
+            "range_low": float(window["low"].min()),
+            "lookback_candles": {"recent": len(recent), "window": len(window)},
+            "data_quality": "good" if vwap is not None else "missing",
+        }
+
+    def _correlation(self) -> dict:
+        series = {symbol: closes for symbol, closes in self.close_history.items() if len(closes) >= 30}
+        if len(series) < 2:
+            return {"pair": None, "value": None, "window": 0, "data_quality": "unavailable", "reason": "insufficient_history"}
+        (symbol_a, closes_a), (symbol_b, closes_b) = sorted(series.items())[:2]
+        length = min(len(closes_a), len(closes_b), 200)
+        first, second = np.asarray(closes_a[-length:], dtype=float), np.asarray(closes_b[-length:], dtype=float)
+        usable = (first[:-1] > 0) & (second[:-1] > 0)
+        returns_a, returns_b = np.diff(first)[usable] / first[:-1][usable], np.diff(second)[usable] / second[:-1][usable]
+        finite = np.isfinite(returns_a) & np.isfinite(returns_b)
+        returns_a, returns_b = returns_a[finite], returns_b[finite]
+        if returns_a.size < 2 or float(np.std(returns_a)) == 0 or float(np.std(returns_b)) == 0:
+            return {"pair": f"{symbol_a}_{symbol_b}", "value": None, "window": length, "data_quality": "unavailable", "reason": "zero_variance"}
+        return {
+            "pair": f"{symbol_a}_{symbol_b}",
+            "value": round(float(np.corrcoef(returns_a, returns_b)[0, 1]), 4),
+            "window": length,
+            "data_quality": "good",
+        }
+
+    @staticmethod
+    def _realized_pnl(fills: list[dict]) -> float | None:
+        inventory: dict[str, dict[str, float]] = {}
+        realized = 0.0
+        try:
+            for fill in fills:
+                symbol, quantity, price = fill["symbol"], float(fill["quantity"]), float(fill["price"])
+                fee = float(fill.get("fee") or 0)
+                book = inventory.setdefault(symbol, {"quantity": 0.0, "cost": 0.0})
+                if fill.get("side") == "buy":
+                    book["quantity"] += quantity
+                    book["cost"] += price * quantity
+                    realized -= fee
+                    continue
+                matched = min(quantity, book["quantity"])
+                if matched > 0:
+                    realized += (price - book["cost"] / book["quantity"]) * matched
+                    book["quantity"] -= matched
+                    book["cost"] = (book["cost"] / (book["quantity"] + matched)) * book["quantity"]
+                realized -= fee
+            return round(realized, 8)
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+            return None
+
+    def _fills_context(self) -> dict:
+        fills = list(getattr(self.broker, "fills", []))[-20:]
+        return {
+            "recent": fills,
+            "count": len(getattr(self.broker, "fills", [])),
+            "last_fill": fills[-1] if fills else None,
+            "realized_pnl": self._realized_pnl(fills),
+            "fee_pct": self.broker.fee_pct,
+            "data_quality": "good",
+        }
+
+    def _proposal_context(self, snapshot, decision: dict, equity: float, buy_slippage: float | None) -> dict:
+        entry = self._finite(snapshot.last)
+        stop, target = self._finite(decision.get("stop_loss")), self._finite(decision.get("take_profit"))
+        action = decision.get("action")
+        quantity = notional = position_pct = risk_reward = None
+        if action == "buy" and entry and stop and entry > stop:
+            risk_amount = equity * self.settings.risk_per_trade_pct
+            quantity = min(risk_amount / (entry - stop), self.broker.cash * self.settings.max_position_pct / entry)
+            notional = quantity * entry
+            position_pct = notional / equity if equity else None
+            if target and target > entry:
+                risk_reward = (target - entry) / (entry - stop)
+        executable = action in ("buy", "sell")
+        return {
+            "source": "deterministic_strategy",
+            "action": action,
+            "reason": decision.get("reason"),
+            "entry_price": entry if executable else None,
+            "stop_loss": stop,
+            "take_profit": target,
+            "risk_reward_ratio": risk_reward,
+            "quantity": quantity,
+            "notional": notional,
+            "position_pct": position_pct,
+            "max_position_pct": self.settings.max_position_pct,
+            "risk_per_trade_pct": self.settings.risk_per_trade_pct,
+            "slippage_pct": buy_slippage,
+            "execution_enabled": self.settings.enable_paper_execution,
+            "order_type": "market",
+            "data_quality": "good" if executable else "not_applicable",
+        }
+
+    def _agent_snapshot(self, symbol, snapshot, values, ticker_row, orderbook, spread, portfolio, risk, news, proposal, candles):
+        """Assemble the per-call context shipped to all eight agents."""
+        features = {}
+        for key, value in values.items():
+            clean = self._finite(value)
+            if clean is not None:
+                features[key] = clean
+        regime = self._regime_context(values)
+        structure = self._structure_context(candles, snapshot, values)
+        return {
+            "symbol": symbol,
+            "market": {
+                "last": snapshot.last,
+                "bid": snapshot.bid,
+                "ask": snapshot.ask,
+                "mid_price": (snapshot.bid + snapshot.ask) / 2,
+                "spread_pct": spread,
+                "volume_24h": self._finite(ticker_row.get("vol24h")),
+                "volume_currency_24h": self._finite(ticker_row.get("volCcy24h")),
+                "timestamp_ms": snapshot.timestamp_ms,
+                "data_quality": "good",
+            },
+            "features": features,
+            "regime": self._regime_context(values),
+            "structure": self._structure_context(candles, snapshot, values),
+            "orderbook": orderbook,
+            "news": news,
+            "portfolio": portfolio,
+            "risk": risk,
+            "proposal": proposal,
+            "as_of": datetime.now(UTC).isoformat(timespec="seconds"),
+            "timeframe": "1m",
+            "data_quality": {
+                "market": "good",
+                "features": "good" if features else "missing",
+                "regime": regime["data_quality"],
+                "structure": structure["data_quality"],
+                "orderbook": orderbook.get("data_quality"),
+                "news": news["data_quality"],
+                "portfolio": portfolio["data_quality"],
+                "risk": risk["data_quality"],
+                "proposal": proposal["data_quality"],
+            },
+        }
+
+    async def _fetch_news(self, symbol: str) -> dict:
+        try:
+            return await self.news.fetch(symbol)
+        except Exception as exc:  # noqa: BLE001 - never let a news outage break scanning
+            log.warning("news_fetch_failed", extra={"symbol": symbol, "error": f"{type(exc).__name__}: {exc}"})
+            return NewsService.unavailable("news_fetch_exception", symbol)
+
+    async def _ai_round(self, symbol, snapshot, values, row, orderbook_response, spread, decision, candles):
+        """Run one advisory round for all eight agents and persist decisions plus usage totals."""
+        round_id = uuid.uuid4().hex[:12]
+        prices = {symbol: snapshot.last}
+        prices.update({item_symbol: position.entry_price for item_symbol, position in self.broker.positions.items()})
+        portfolio = self._portfolio_context(prices)
+        orderbook = self._orderbook_context(orderbook_response, snapshot.last)
+        slippage = orderbook.get("estimated_buy_slippage_pct")
+        risk = self._risk_context(portfolio["equity"], symbol, spread, slippage)
+        news = await self._fetch_news(symbol)
+        proposal = self._proposal_context(snapshot, decision, portfolio["equity"], slippage)
+        agent_snapshot = self._agent_snapshot(
+            symbol, snapshot, values, row, orderbook, spread, portfolio, risk, news, proposal, candles
+        )
+        ai_audit_events = []
+
+        def audit_agent_decision(decision_event):
+            decision_event["called_at"] = datetime.fromtimestamp(decision_event["ts"], UTC).isoformat(timespec="milliseconds")
+            decision_event["round_id"] = round_id
+            decision_event["input_context"] = agent_snapshot
+            ai_audit_events.append(decision_event)
+            log.info("agent_decision", extra=decision_event)
+
+        consensus = await self.orchestrator.decision(agent_snapshot, audit_agent_decision)
+        for decision_event in ai_audit_events:
+            await self.audit.append("agent_decision", decision_event)
+        self.last_ai_advisory_at[symbol] = time.time()
+        consensus_event = consensus.model_dump()
+        consensus_event["round_id"] = round_id
+        consensus_event["deterministic_decision"] = decision
+        consensus_event["ai_usage"] = {
+            "agent_count": len(ai_audit_events),
+            "input_tokens": sum(item.get("input_tokens", 0) for item in ai_audit_events),
+            "output_tokens": sum(item.get("output_tokens", 0) for item in ai_audit_events),
+            "total_tokens": sum(item.get("total_tokens", 0) for item in ai_audit_events),
+            "estimated_cost_usd": round(sum(item.get("estimated_cost_usd", 0.0) for item in ai_audit_events), 10),
+            "model": self.settings.openai_model,
+        }
+        await self.audit.append("consensus", consensus_event)
+        return consensus, ai_audit_events, agent_snapshot
+
+    async def ai_probe(self, symbol: str) -> dict:
+        """Operator-triggered single AI round on live data; bypasses the advisory cooldown."""
+        result, candle_response, orderbook_response = await asyncio.gather(
+            self.client.ticker(symbol), self.client.candles(symbol), self.client.order_book(symbol), return_exceptions=True
+        )
+        for response in (result, candle_response):
+            if isinstance(response, Exception):
+                raise response
+        if isinstance(orderbook_response, Exception):
+            orderbook_response = {"data": []}
+        row = result["data"][0]
+        snapshot = Snapshot(symbol, int(row["ts"]), float(row["bidPx"]), float(row["askPx"]), float(row["last"]))
+        candles = candles_frame(candle_response.get("data", []))
+        features = compute_features(candles) if len(candles) >= 200 else None
+        values = features.iloc[-1].to_dict() if features is not None and not features.empty else {}
+        spread = (snapshot.ask - snapshot.bid) / snapshot.ask
+        decision = signal(values, spread, self.settings.max_spread_pct)
+        consensus, ai_audit_events, _ = await self._ai_round(
+            symbol, snapshot, values, row, orderbook_response, spread, decision, candles
+        )
+        return {
+            "symbol": symbol,
+            "price": snapshot.last,
+            "deterministic": decision,
+            "action": consensus.action,
+            "score": consensus.score,
+            "approved": consensus.approved,
+            "reason_codes": consensus.reason_codes,
+            "ai_usage": {
+                "agent_count": len(ai_audit_events),
+                "input_tokens": sum(item.get("input_tokens", 0) for item in ai_audit_events),
+                "output_tokens": sum(item.get("output_tokens", 0) for item in ai_audit_events),
+                "total_tokens": sum(item.get("total_tokens", 0) for item in ai_audit_events),
+                "estimated_cost_usd": round(sum(item.get("estimated_cost_usd", 0.0) for item in ai_audit_events), 10),
+                "model": self.settings.openai_model,
+            },
+            "agents": [
+                {
+                    "agent": event["agent_name"], "action": event["action"], "confidence": event["confidence"],
+                    "data_quality": event["data_quality"], "veto": event["veto"], "status": event["status"],
+                    "reason_codes": event["reason_codes"], "validation_error": event["validation_error"],
+                    "input_tokens": event["input_tokens"], "output_tokens": event["output_tokens"],
+                    "estimated_cost_usd": event["estimated_cost_usd"],
+                }
+                for event in ai_audit_events
+            ],
+        }
 
     def should_persist_tick(self, symbol: str, event: dict, now: float) -> bool:
         if event.get("action") != "hold":
@@ -75,7 +469,13 @@ class PaperWorker:
     async def tick(self, symbol: str) -> dict:
         persisted = False
         try:
-            result, candle_response = await asyncio.gather(self.client.ticker(symbol), self.client.candles(symbol))
+            result, candle_response, orderbook_response = await asyncio.gather(
+                self.client.ticker(symbol), self.client.candles(symbol), self.client.order_book(symbol), return_exceptions=True
+            )
+            if isinstance(result, Exception) or isinstance(candle_response, Exception):
+                raise result if isinstance(result, Exception) else candle_response
+            if isinstance(orderbook_response, Exception):
+                orderbook_response = {"data": []}
             row = result["data"][0]
             now = int(time.time() * 1000)
             snapshot = Snapshot(symbol, int(row["ts"]), float(row["bidPx"]), float(row["askPx"]), float(row["last"]))
@@ -84,6 +484,8 @@ class PaperWorker:
             else:
                 spread = (snapshot.ask - snapshot.bid) / snapshot.ask
                 candles = candles_frame(candle_response.get("data", []))
+                if len(candles) >= 30:
+                    self.close_history[symbol] = [float(value) for value in candles["close"].tail(200)]
                 features = compute_features(candles) if len(candles) >= 200 else None
                 latest = features.iloc[-1] if features is not None and not features.empty else None
                 values = latest.to_dict() if latest is not None else {}
@@ -105,28 +507,10 @@ class PaperWorker:
                 # GPT agents are advisory only and are cost-gated by deterministic filters/cooldown.
                 should_call, ai_reason = self.should_call_ai(symbol, decision, time.time())
                 if should_call:
-                    agent_snapshot = {"symbol":symbol,"last":snapshot.last,"bid":snapshot.bid,"ask":snapshot.ask,"spread_pct":spread,"features":{k:(float(v) if hasattr(v,"__float__") else v) for k,v in values.items() if k in ("ema20","ema50","rsi","macd","macd_signal","atr")}}
-                    ai_audit_events = []
-                    def audit_agent_decision(decision_event):
-                        decision_event["called_at"] = datetime.fromtimestamp(decision_event["ts"], UTC).isoformat(timespec="milliseconds")
-                        ai_audit_events.append(decision_event)
-                        log.info("agent_decision", extra=decision_event)
-
-                    consensus = await self.orchestrator.decision(agent_snapshot, audit_agent_decision)
-                    for decision_event in ai_audit_events:
-                        await self.audit.append("agent_decision", decision_event)
-                    self.last_ai_advisory_at[symbol] = time.time()
+                    consensus, _, _ = await self._ai_round(
+                        symbol, snapshot, values, row, orderbook_response, spread, decision, candles
+                    )
                     event["agent_consensus"] = {"action":consensus.action,"score":consensus.score,"approved":consensus.approved,"reason_codes":consensus.reason_codes}
-                    consensus_event = consensus.model_dump()
-                    consensus_event["ai_usage"] = {
-                        "agent_count": len(ai_audit_events),
-                        "input_tokens": sum(item.get("input_tokens", 0) for item in ai_audit_events),
-                        "output_tokens": sum(item.get("output_tokens", 0) for item in ai_audit_events),
-                        "total_tokens": sum(item.get("total_tokens", 0) for item in ai_audit_events),
-                        "estimated_cost_usd": round(sum(item.get("estimated_cost_usd", 0.0) for item in ai_audit_events), 10),
-                        "model": self.settings.openai_model,
-                    }
-                    await self.audit.append("consensus", consensus_event)
                 else:
                     event["agent_consensus"] = {"action":"hold","score":0,"approved":False,"reason_codes":[ai_reason],"skipped":True}
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:

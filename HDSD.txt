@@ -1,0 +1,71 @@
+## 1. Thanh pill trên cùng
+- `mode paper` — bot đang chạy chế độ giấy (không đặt lệnh thật).
+- `worker healthy` (xanh) — vòng quét còn sống: `last_tick_at` trong 120s gần đây.
+- `rev unknown` — mã commit đang chạy. Hiện `unknown` vì bạn đang chạy **local**; trên Railway nó đọc biến `RAILWAY_GIT_COMMIT_SHA`.
+- `last tick 1:03:44 AM (29s ago)` — lần quét thị trường gần nhất + độ trễ so với hiện tại.
+- `db postgres` (xanh) — dashboard đang đọc **PostgreSQL production**; nếu là sqlite nó sẽ đỏ và ghi `(local, not production)`.
+- `BTC-USDT ▾` + `Run AI round` — chọn cặp và **gọi thủ công 1 vòng 8 agent** (tốn token thật, ghi vào audit).
+- `refresh now` + `auto-refresh 10s` — tự tải lại mỗi 10s, hoặc bấm tay.
+
+## 2. Dải 9 ô số liệu
+- **AI ROUNDS 38** — tổng số vòng đã gọi cả 8 agent (mỗi dòng `consensus` = 1 vòng). `304 agent calls` = 38 × 8.
+- **TOTAL TOKENS 101,891** — token cộng dồn: `in 66,848 / out 35,043`. Input = system prompt + snapshot gửi đi; output = JSON agent trả về.
+- **TOTAL AI COST (ALL TIME) $0.2078** — tổng tiền đã tiêu cho OpenAI, tính bằng `input×$0.75/1M + output×$4.50/1M` (theo `AI_INPUT/OUTPUT_COST_PER_MILLION`).
+- **AI COST (24H) $0.2078** — tiêu trong 24h qua: `38 rounds · 101,891 tokens`. Bằng đúng all-time vì project mới chạy trong 24h.
+- **LAST ROUND COST $0.005698** — tiền của **1 vòng** gần nhất (~0,57 cent). Phụ đề `legacy round BTC-USDT` nghĩa là bản ghi cũ (production đang chạy build trước khi có `round_id`).
+- **AGENT FALLBACKS 0 / 304** — số lần agent trả lỗi/timeout/sai schema. **0 = mọi lời gọi đều hợp lệ** (VESKA đã hết lỗi).
+- **PAPER EQUITY $10016.6651** — vốn giả lập (cash $10016.6651 + giá trị vị thế). Lãi $16.67 là từ lần khớp lệnh trước đó.
+- **OPEN POSITIONS 0 / fills 20** — đang không giữ vị thế nào; đã từng khớp 20 lệnh.
+- **AUDIT DATABASE PostgreSQL · 127.0.0.1:15432/railway · durable** — nơi đọc dữ liệu (qua tunnel, sẽ mất nếu tunnel tắt). `durable` = không mất khi redeploy.
+
+## 3. LAST AI ROUND (bảng chi tiết 1 vòng)
+- Header: **$0.005698** + `8 agents · 2,723 tokens (in 1,748 / out 975)` + thời điểm gọi (`56m ago`) + symbol + model.
+- Dòng verdict: `hold · score 0 · approved no · reason invalid_or_veto`, `deterministic trigger: -` (bản cũ không lưu lệnh gốc; sau khi deploy code mới sẽ hiện `buy/sell + SL/TP`).
+- Bảng agent:
+  - **AGENT** — TIDAL (trend), NORO (fair value), LUMEN (tin tức), ZEPHR (liquidity), OKAPI (portfolio), RUNE (risk), VESKA (thực thi), MARIN (giám sát vị thế).
+  - **ACTION / CONF** — agent đề xuất gì, độ tự tin 0–1. Ví dụ NORO `hold 0.74`.
+  - **HORIZON** — khung thời gian agent đề xuất (15m/5m/1h).
+  - **ENTRY / SL / TP / POS %** — kế hoạch vào lệnh, cắt lỗ, chốt lời, % vốn. Đang `-`/`0.00%` vì agent trả `hold` nên không đặt giá.
+  - **QUALITY** — `good` / `degraded` / `bad`. **`degraded` là lý do chặn lệnh**: LUMEN (thiếu news) và OKAPI (thiếu portfolio/correlation) luôn degraded.
+  - **VETO** — agent phủ quyết. OKAPI và VESKA bật `veto` trong vòng này.
+  - **IN/OUT TOKENS, COST USD** — token và tiền của **từng agent**. VESKA `274 in` cao hơn các agent khác (~210) vì phải đọc thêm `proposal`.
+  - **LATENCY MS** — thời gian model trả lời (906 → 3,884ms).
+  - **STATUS** — `ok` = JSON hợp lệ; `fallback` = lỗi (đang 0).
+  - **AGENT RETURNED** — bấm `▸` để xem **nguyên văn JSON model trả về** + reason codes.
+
+## 4. AI COST BY AGENT
+Bảng tổng hợp chi phí **theo từng agent** qua tất cả các vòng:
+- **CALLS** 38 = số lần gọi; **IN/OUT/TOTAL** tokens; **COST USD** tiền riêng của agent đó.
+- **FALLBACK** 0 = không lần nào lỗi.
+- **VETO** — số lần agent đó phủ quyết: **MARIN 21, RUNE 18, LUMEN 16, OKAPI 16, VESKA 5, ZEPHR 5, NORO 3, TIDAL 1**.
+- **SHARE** — thanh tỉ lệ đóng góp chi phí. TIDAL đắt nhất ($0.0285) vì output dài; LUMEN/VESKA rẻ hơn.
+
+## 5. PORTFOLIO
+- `cash $10016.6651 · equity $10016.6651 · positions 0` — tiền mặt, tổng tài sản, số vị thế.
+- Bảng: Symbol / Qty / Entry / Stop / Target / Opened. Đang `flat` (không có vị thế). Khi có lệnh, đây là nơi xem entry, SL/TP và thời điểm mở.
+
+## 6. AI CONSENSUS ROUNDS
+Lịch sử từng vòng gọi AI (mới nhất trên cùng):
+- **WHEN** thời điểm + cách đây bao lâu; **SYMBOL** cặp được hỏi.
+- **ACTION** kết luận cuối (`hold`); **SCORE** điểm đồng thuận 0–1 (cần ≥ 0.72); **APPROVED** duyệt được hay không (`bad`).
+- **AGENTS/TOKENS/COST USD** — quy mô và tiền của vòng đó.
+- **REASON CODES** `invalid_or_veto` = có agent degraded hoặc veto nên chặn toàn bộ (fail-closed).
+- **MODEL** `gpt-5.4-mini`.
+
+## 7. AGENT DECISIONS (TOKENS / COST / SETUP)
+Log thô từng lời gọi agent (8 dòng mỗi vòng), mới nhất trên cùng:
+- **WHEN / AGENT / SYMBOL / ACTION / CONF / HORIZON / QUALITY / VETO** như trên.
+- **ENTRY / SL / TP** kế hoạch của agent (đang `-` vì toàn `hold`).
+- **NOW** giá thị trường mới nhất của cặp đó (BTC 85,857 · ETH 2,739.41).
+- **VS ENTRY** % chênh giá hiện tại so với entry — chỉ có số khi agent đưa entry (hiện `-`).
+- **IN / OUT / COST USD / LATENCY MS / STATUS** chi phí và thời gian của từng lời gọi.
+- **CONTEXT** xem snapshot đầy đủ đã gửi cho agent đó (regime, structure, orderbook, news, portfolio, proposal).
+
+## 8. MARKET SCANS
+Log vòng quét thị trường (không phải AI): `WHEN · SYMBOL · PRICE · ACTION · REASON · SPREAD · RSI · EMA20 · CONSENSUS · PERSISTED`. Đây là dữ liệu deterministic chạy mỗi 30s; chỉ mẫu 5 phút/lần được lưu DB, còn log runtime vẫn ghi đủ.
+
+**Điều quan trọng nhất đọc từ ảnh của bạn:** cả 38 vòng đều `score 0 · approved bad · invalid_or_veto` — **AI chưa từng duyệt được lệnh nào**. Nguyên nhân không phải AI kém mà do luật fail-closed: chỉ cần 1 trong 8 agent `data_quality != good` hoặc `veto=true` là hủy cả vòng. Hiện có 2 chỗ luôn vi phạm:
+- **LUMEN** → trả `NO_NEWS_SUPPLIED`, quality `degraded` vì chưa cấu hình `NEWS_PROVIDER_URL`.
+- **OKAPI** → `single_asset_only, insufficient_portfolio_context, no_correlation_input`, quality `degraded`.
+
+Ví dụ rõ nhất: 23:49 ETH-USDT, **TIDAL trả `buy` 0.71** nhưng vẫn bị veto của agent khác chặn → consensus `hold`.

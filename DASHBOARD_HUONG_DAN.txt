@@ -1,0 +1,241 @@
+﻿==============================================================================
+  AI AGENT DESK - HƯỚNG DẪN ĐỌC DASHBOARD + SỐ LIỆU CHỤP LÚC 22/09/2026 01:17:16
+==============================================================================
+
+File này giải thích từng bảng trên dashboard http://127.0.0.1:8000/dashboard
+và ghi lại số liệu thật đọc từ PostgreSQL production tại thời điểm xuất file.
+LƯU Ý: đây là ảnh chụp (snapshot) - số liệu sẽ cũ đi theo thời gian.
+
+Nguồn dữ liệu : postgres @ 127.0.0.1:15432/railway (bền vững)
+Chế độ bot    : paper   |  worker: đang chạy
+Mã commit     : unknown (local không có biến RAILWAY_GIT_COMMIT_SHA nên hiện 'unknown')
+Model AI      : gpt-5.4-mini
+
+
+##############################################################################
+# PHẦN A. TÓM TẮT NHANH (đọc 6 dòng này là nắm được tình hình)
+##############################################################################
+
+1. Đã gọi AI        : 40 vòng, mỗi vòng 8 agent => 320 lời gọi agent.
+2. Token đã dùng    : 104,469 token (gửi đi 68,564 / nhận về 35,905).
+3. Tiền đã bỏ ra    : $0.2130 tổng cộng; $0.2130 trong 24h qua; $0 cho vòng gần nhất.
+4. Lỗi khi gọi AI   : 8 lần fallback (agent trả sai định dạng / timeout).
+5. Lệnh đã duyệt    : 0 - toàn bộ 40 vòng đều kết luận HOLD (xem Phần D để hiểu vì sao).
+6. Vị thế đang mở   : 0 vị thế; tiền mặt $10016.6651; tổng tài sản giả lập $10016.6651.
+
+
+##############################################################################
+# PHẦN B. GIẢI THÍCH TỪNG BẢNG / TỪNG CỘT
+##############################################################################
+
+--- B1. THANH PILL Ở TRÊN CÙNG -----------------------------------------
+  mode paper          : bot chạy chế độ giấy, KHÔNG đặt lệnh thật.
+  worker healthy      : vòng quét còn sống (lần quét cuối trong vòng 120 giây).
+  rev <mã>            : mã commit đang chạy. Trên Railway đọc từ biến môi trường.
+  last tick ...       : lần quét thị trường gần nhất và cách đây bao lâu.
+  db postgres (xanh)  : dashboard đang đọc PostgreSQL. Nếu sqlite sẽ hiện ĐỎ.
+  BTC-USDT [chọn]     : chọn cặp để gọi AI thủ công.
+  Run AI round        : gọi 1 vòng 8 agent ngay (TỐN TIỀN THẬT, ghi vào audit).
+
+--- B2. DẢI Ô SỐ LIỆU (9 ô) --------------------------------------------
+  AI ROUNDS           : số vòng đã gọi đủ 8 agent (mỗi dòng 'consensus' = 1 vòng).
+  TOTAL TOKENS        : tổng token. 'in' = prompt gửi đi, 'out' = JSON agent trả về.
+  TOTAL AI COST       : tổng tiền đã tiêu, tính theo đơn giá AI_INPUT/OUTPUT_COST_PER_MILLION.
+  AI COST (24H)       : tiền tiêu trong 24 giờ qua + số vòng trong 24h đó.
+  LAST ROUND COST     : tiền của MỘT vòng gần nhất (rẻ hay đắt là ở ô này).
+  AGENT FALLBACKS     : số lần agent lỗi/timeout/sai schema trên tổng số lời gọi.
+  PAPER EQUITY        : vốn giả lập = tiền mặt + giá trị vị thế đang mở.
+  OPEN POSITIONS      : số vị thế đang mở, kèm tổng số lệnh đã từng khớp.
+  AUDIT DATABASE      : nơi dashboard đọc dữ liệu (PostgreSQL qua tunnel = bền vững).
+
+--- B3. BẢNG 'LAST AI ROUND' (vòng gọi AI gần nhất) --------------------
+  Dòng to $...        : số tiền của vòng đó.
+  '8 agents ...'      : số agent, tổng token, chia in/out.
+  'last call ...'     : thời điểm gọi, cặp tiền, model. 'legacy round' = bản ghi cũ
+                        chưa có round_id (build cũ); sau khi deploy code mới sẽ hiện round_id.
+  Dòng verdict        : hold/buy/sell, score 0-1, approved yes/no, reason codes.
+  deterministic trigger: lệnh gốc của chiến lược đã kích hoạt vòng AI đó.
+  Bảng 8 agent, mỗi cột:
+    AGENT    : tên agent. TIDAL=trend, NORO=định giá, LUMEN=tin tức,
+               ZEPHR=thanh khoản, OKAPI=danh mục, RUNE=rủi ro,
+               VESKA=thực thi, MARIN=giám sát vị thế.
+    ACTION   : agent đề xuất gì (buy/sell/hold/reduce/emergency_exit).
+    CONF     : độ tự tin 0-1.
+    HORIZON  : khung thời gian đề xuất (5m/15m/1h).
+    ENTRY/SL/TP/POS%: giá vào, cắt lỗ, chốt lời, % vốn. '-' khi agent trả HOLD.
+    QUALITY  : good / degraded / bad. CHỈ CẦN 1 AGENT KHÁC 'good' LÀ HỦY CẢ VÒNG.
+    VETO     : agent phủ quyết (yes = chặn lệnh).
+    IN/OUT TOKENS, COST USD: chi phí riêng của từng agent.
+    LATENCY  : thời gian model trả lời (ms).
+    STATUS   : ok = JSON hợp lệ; fallback = lỗi.
+    AGENT RETURNED: bấm để xem NGUYÊN VĂN JSON model trả về + reason codes.
+
+--- B4. BẢNG 'AI COST BY AGENT' ----------------------------------------
+  CALLS     : số lần agent được gọi.
+  IN/OUT/TOTAL: token của agent đó.
+  COST USD  : tiền riêng của agent đó.
+  FALLBACK  : số lần agent đó trả lỗi.
+  VETO      : số lần agent đó phủ quyết.
+  SHARE     : thanh tỉ lệ đóng góp chi phí giữa các agent.
+
+--- B5. BẢNG 'PORTFOLIO' -----------------------------------------------
+  cash/equity/positions: tiền mặt, tổng tài sản, số vị thế.
+  SYMBOL/QTY/ENTRY/STOP/TARGET/OPENED: mã, khối lượng, giá vào, cắt lỗ,
+  chốt lời, thời điểm mở. 'flat' = đang không giữ vị thế nào.
+
+--- B6. BẢNG 'AI CONSENSUS ROUNDS' (lịch sử các vòng) ------------------
+  WHEN/SYMBOL : thời điểm và cặp tiền của vòng.
+  ACTION      : kết luận cuối; SCORE: điểm đồng thuận (cần >= 0.72 mới duyệt).
+  APPROVED    : ok = duyệt được lệnh, bad = bị chặn.
+  AGENTS/TOKENS/COST USD: quy mô và tiền của vòng.
+  REASON CODES: lý do. 'invalid_or_veto' = có agent degraded hoặc veto.
+  MODEL       : model AI đã dùng.
+
+--- B7. BẢNG 'AGENT DECISIONS' (log thô từng lời gọi) ------------------
+  8 dòng cho mỗi vòng (mỗi agent 1 dòng). Các cột giống B3, thêm:
+  NOW       : giá thị trường mới nhất của cặp đó.
+  VS ENTRY  : giá hiện tại lệch bao nhiêu % so với entry agent đề xuất.
+  CONTEXT   : bấm xem toàn bộ dữ liệu đã gửi cho agent (regime, structure,
+              orderbook, news, portfolio, proposal).
+
+--- B8. BẢNG 'MARKET SCANS' (quét thị trường, KHÔNG phải AI) -----------
+  WHEN/SYMBOL/PRICE: thời điểm, cặp, giá.
+  ACTION/REASON    : tín hiệu của chiến lược deterministic (trend_momentum,
+                     no_conservative_setup, spread_limit...).
+  SPREAD/RSI/EMA20 : chênh giá mua-bán, chỉ số RSI, đường EMA20.
+  CONSENSUS        : kết luận AI cho vòng đó (nếu có).
+  PERSISTED        : dòng này có được lưu vào database hay chỉ ghi log.
+
+
+##############################################################################
+# PHẦN C. SỐ LIỆU THẬT LÚC XUẤT FILE
+##############################################################################
+
+== TỔNG HỢP ==
+  Tổng vòng AI        : 40
+  Tổng lời gọi agent  : 320
+  Token gửi đi (in)   : 68,564
+  Token nhận về (out) : 35,905
+  Tổng token          : 104,469
+  Tổng tiền           : $0.2130
+  Tiền 24h qua        : $0.2130 (40 vòng, 104,469 token)
+
+== CHI PHÍ THEO TỪNG AGENT ==
+  AGENT    CALLS        IN       OUT      TOTAL    COST USD  FALLBACK   VETO
+  TIDAL       40     8,239     5,142     13,381     $0.0293         1      1
+  NORO        40     8,200     5,041     13,241     $0.0288         1      3
+  MARIN       40     8,239     4,651     12,890     $0.0271         1     22
+  OKAPI       40     8,239     4,611     12,850     $0.0269         1     16
+  LUMEN       40     8,317     4,280     12,597     $0.0255         1     16
+  ZEPHR       40     8,356     4,233     12,589     $0.0253         1      6
+  RUNE        40     8,239     4,250     12,489     $0.0253         1     19
+  VESKA       40    10,735     3,697     14,432     $0.0247         1      5
+
+== VÒNG AI GẦN NHẤT ==
+  Thời điểm    : 22/09 01:07:56
+  Cặp / model  : BTC-USDT / gpt-5.4-mini
+  Chi phí vòng : $0 cho 0 token (in 0 / out 0)
+  Kết luận     : hold | score 0.000 | approved False | reason invalid_or_veto
+  Ghi chú dữ liệu: có đủ token/cost
+
+  AGENT   ACT    CONF QUALITY  VETO               IN TOK   OUT TOK   COST USD       MS STATUS
+  TIDAL   hold   0.00 bad      không                   0         0         $0    4,838 fallback
+  NORO    hold   0.00 bad      không                   0         0         $0    4,587 fallback
+  LUMEN   hold   0.00 bad      không                   0         0         $0    4,602 fallback
+  ZEPHR   hold   0.00 bad      không                   0         0         $0    4,646 fallback
+  OKAPI   hold   0.00 bad      không                   0         0         $0    4,582 fallback
+  RUNE    hold   0.00 bad      không                   0         0         $0    4,634 fallback
+  VESKA   hold   0.00 bad      không                   0         0         $0    4,609 fallback
+  MARIN   hold   0.00 bad      không                   0         0         $0    4,635 fallback
+
+  Lý do (reason codes) từng agent trả về:
+    TIDAL   openai_http_error
+    NORO    openai_http_error
+    LUMEN   openai_http_error
+    ZEPHR   openai_http_error
+    OKAPI   openai_http_error
+    RUNE    openai_http_error
+    VESKA   openai_http_error
+    MARIN   openai_http_error
+
+== 7 VÒNG GẦN NHẤT ==
+  THỜI ĐIỂM      CẶP        ACTION  SCORE APPROVED   AGENTS    TOKENS    COST USD
+  22/09 01:07:56 BTC-USDT   hold    0.000 bad             8         0          $0
+  22/09 01:07:25 BTC-USDT   hold    0.000 bad             8     2,578   $0.005166
+  22/09 00:08:16 BTC-USDT   hold    0.000 bad             8     2,723   $0.005698
+  21/09 23:52:26 BTC-USDT   hold    0.000 bad             8     2,560   $0.004965
+  21/09 23:49:44 ETH-USDT   hold    0.000 bad             8     2,718   $0.005646
+  21/09 23:32:22 ETH-USDT   hold    0.000 bad             8     2,669   $0.005365
+  21/09 23:16:32 ETH-USDT   hold    0.000 bad             8     2,690   $0.005520
+
+== GIÁ MỚI NHẤT (từ vòng quét) ==
+  BTC-USDT      86,033.30   (RSI 65.2)
+  ETH-USDT       2,752.59   (RSI 76.9)
+
+== DANH MỤC ==
+  Tiền mặt: $10016.6651 | Tổng tài sản: $10016.6651 | Số vị thế: 0 | Lệnh đã khớp: 20
+
+
+##############################################################################
+# PHẦN D. VÌ SAO MỌI VÒNG ĐỀU KẾT LUẬN HOLD
+##############################################################################
+
+Luật đồng thuận hiện tại (fail-closed): chỉ cần MỘT trong 8 agent có
+data_quality khác 'good' HOẶC veto = true thì hủy toàn bộ vòng, kết luận HOLD
+với reason_code 'invalid_or_veto'. Muốn duyệt lệnh phải đủ 8 agent 'good',
+không veto, và điểm đồng thuận >= 0.72.
+
+Hiện có 2 chỗ luôn vi phạm nên KHÔNG vòng nào được duyệt:
+  1) LUMEN  : trả 'NO_NEWS_SUPPLIED', quality 'degraded'
+              -> vì chưa cấu hình NEWS_PROVIDER_URL (nguồn tin).
+  2) OKAPI  : trả 'insufficient_portfolio_context, no_correlation_input',
+              quality 'degraded' -> vì chưa có dữ liệu danh mục/tương quan.
+Ngoài ra VESKA thường 'degraded' khi context thực thi chưa đủ.
+
+Hướng xử lý (chọn 1):
+  (a) Bổ sung dữ liệu: cấu hình NEWS_PROVIDER_URL cho LUMEN, và tính
+      correlation/portfolio context cho OKAPI.
+  (b) Nới luật đồng thuận: khi một miền dữ liệu chưa có (news/portfolio),
+      loại phiếu của agent đó khỏi vòng thay vì hủy cả vòng.
+
+
+##############################################################################
+# PHẦN E. CHẠY LẠI DASHBOARD (khi tunnel hoặc server tắt)
+##############################################################################
+
+B1. Mở tunnel tới PostgreSQL Railway (cửa sổ riêng, giữ nguyên):
+    railway connect Postgres --tunnel-only -P 15432 -p 7de12891-eae9-4169-97b2-6b99772283c5 -e production
+
+B2. Trỏ dashboard vào Postgres rồi chạy server:
+    $env:DATABASE_URL = (Get-Content "$env:USERPROFILE\.futurev2\postgres_url.txt" -Raw).Trim()
+    python -m uvicorn app.api.main:app --host 127.0.0.1 --port 8000
+
+B3. Mở http://127.0.0.1:8000/dashboard  (Ctrl+F5 nếu thấy giao diện cũ).
+
+Chuỗi kết nối DB lưu tại: C:\Users\Admin\.futurev2\postgres_url.txt (ngoài repo,
+có chứa mật khẩu - KHÔNG copy vào git). Nếu tunnel tắt, dashboard hiện băng đỏ
+'Audit store unreachable'.
+
+
+##############################################################################
+# PHẦN F. TỪ ĐIỂN THUẬT NGỮ
+##############################################################################
+
+  paper trading   : giao dịch giả lập, không dùng tiền thật.
+  round / vòng AI : một lần gọi đủ 8 agent cho 1 cặp tiền.
+  agent call      : một lời gọi tới model cho một agent.
+  snapshot/context: toàn bộ dữ liệu gửi cho agent (thị trường, chỉ báo, orderbook,
+                    news, portfolio, risk, proposal).
+  token in (input): token của dữ liệu gửi đi, tính tiền rẻ hơn.
+  token out       : token của câu trả lời, tính tiền đắt hơn.
+  fallback        : agent lỗi nên bị thay bằng quyết định HOLD an toàn.
+  veto            : agent phủ quyết, chặn lệnh.
+  degraded/bad    : chất lượng dữ liệu của agent không đạt.
+  consensus       : kết luận tổng hợp từ 8 phiếu.
+  deterministic   : tín hiệu từ chiến lược cứng (EMA/RSI/MACD), không phải AI.
+  veto/degraded   : dấu hiệu AI bị chặn vì thiếu dữ liệu, không phải vì thị trường xấu.
+  audit           : bản ghi lâu dài trong database (paper_tick/agent_decision/consensus).
+
+==============================================================================
+  HẾT - sinh tự động bởi /api/dashboard lúc 22/09/2026 01:17:16
+==============================================================================
