@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sqlite3
@@ -66,17 +67,31 @@ class PostgresAuditRepository:
     def __init__(self, database_url: str):
         self.database_url = _postgres_url(database_url)
         self.pool = None
+        self._connect_lock = asyncio.Lock()
 
     async def connect(self):
-        if self.pool is None:
+        if self.pool is not None:
+            return self
+        async with self._connect_lock:
+            if self.pool is not None:
+                return self
             try:
                 import asyncpg
             except ImportError as error:
                 raise RuntimeError("asyncpg is required for PostgreSQL audit storage") from error
-            self.pool = await asyncpg.create_pool(self.database_url, min_size=1, max_size=5)
-            async with self.pool.acquire() as connection:
-                await self._ensure_schema(connection)
-        return self
+            last_error = None
+            for attempt in range(1, 4):
+                try:
+                    pool = await asyncpg.create_pool(self.database_url, min_size=1, max_size=5, timeout=10)
+                    async with pool.acquire() as connection:
+                        await self._ensure_schema(connection)
+                    self.pool = pool
+                    return self
+                except Exception as error:
+                    last_error = error
+                    if attempt < 3:
+                        await asyncio.sleep(attempt * 2)
+            raise last_error
 
     async def _ensure_schema(self, connection):
         await connection.execute(
@@ -98,14 +113,22 @@ class PostgresAuditRepository:
         )
 
     async def append(self, kind: str, payload: dict[str, Any]):
-        await self.connect()
-        async with self.pool.acquire() as connection:
-            await connection.execute(
-                "INSERT INTO audit_events(kind, payload, ts) VALUES($1, $2::jsonb, $3)",
-                kind,
-                json.dumps(payload, default=str),
-                time.time(),
-            )
+        for attempt in range(1, 4):
+            try:
+                await self.connect()
+                async with self.pool.acquire() as connection:
+                    await connection.execute(
+                        "INSERT INTO audit_events(kind, payload, ts) VALUES($1, $2::jsonb, $3)",
+                        kind,
+                        json.dumps(payload, default=str),
+                        time.time(),
+                    )
+                return
+            except Exception:
+                if attempt == 3:
+                    raise
+                await self.close()
+                await asyncio.sleep(attempt * 2)
 
     async def recent(self, limit: int = 20):
         await self.connect()
