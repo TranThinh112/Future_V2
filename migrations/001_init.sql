@@ -16,3 +16,5 @@ CREATE INDEX IF NOT EXISTS idx_market_candles_symbol_ts ON market_candles(symbol
 CREATE INDEX IF NOT EXISTS idx_orderbook_symbol_ts ON orderbook_snapshots(symbol, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_features_symbol_ts ON features(symbol, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_decision_id ON orders(decision_id);
+
+CREATE TABLE IF NOT EXISTS market_scan_hourly(bucket_start TIMESTAMPTZ NOT NULL, symbol TEXT NOT NULL, scans INTEGER NOT NULL, buy_count INTEGER NOT NULL, sell_count INTEGER NOT NULL, hold_count INTEGER NOT NULL, min_price DOUBLE PRECISION, max_price DOUBLE PRECISION, last_price DOUBLE PRECISION, avg_rsi DOUBLE PRECISION, ai_calls INTEGER NOT NULL DEFAULT 0, ai_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(bucket_start, symbol));

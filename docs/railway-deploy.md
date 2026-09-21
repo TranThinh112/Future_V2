@@ -82,3 +82,13 @@ Audit events are stored in the PostgreSQL database referenced by `DATABASE_URL`,
 6. Generate a domain and verify `/health`.
 
 Keep `ENABLE_LIVE_TRADING=false` and `ENABLE_PAPER_EXECUTION=false` while validating the deployment.
+
+
+## Audit retention
+
+`paper_tick` events are sampled by default to one row per symbol every 300 seconds,
+while important ticks (`buy`, `sell`, market-data errors, fills, or AI consensus)
+are always persisted immediately. PostgreSQL keeps detailed `paper_tick` rows for
+`AUDIT_PAPER_TICK_RETENTION_DAYS` days and periodically aggregates older scan
+history into `market_scan_hourly`. Agent decisions and consensus events are not
+removed by this cleanup policy.

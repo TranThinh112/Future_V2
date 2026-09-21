@@ -60,6 +60,12 @@ class AsyncSQLiteAuditRepository:
     async def close(self):
         self.repository.close()
 
+    async def aggregate_hourly(self, retention_days=30):
+        return None
+
+    async def cleanup(self, retention_days=30):
+        return None
+
 
 class PostgresAuditRepository:
     """Durable audit repository backed by Railway PostgreSQL."""
@@ -111,6 +117,26 @@ class PostgresAuditRepository:
         await connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_audit_events_kind_ts ON audit_events(kind, ts DESC)"
         )
+        await connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS market_scan_hourly(
+                bucket_start TIMESTAMPTZ NOT NULL,
+                symbol TEXT NOT NULL,
+                scans INTEGER NOT NULL,
+                buy_count INTEGER NOT NULL,
+                sell_count INTEGER NOT NULL,
+                hold_count INTEGER NOT NULL,
+                min_price DOUBLE PRECISION,
+                max_price DOUBLE PRECISION,
+                last_price DOUBLE PRECISION,
+                avg_rsi DOUBLE PRECISION,
+                ai_calls INTEGER NOT NULL DEFAULT 0,
+                ai_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                PRIMARY KEY(bucket_start, symbol)
+            )
+            """
+        )
 
     async def append(self, kind: str, payload: dict[str, Any]):
         for attempt in range(1, 4):
@@ -146,6 +172,78 @@ class PostgresAuditRepository:
             }
             for row in rows
         ]
+
+    async def aggregate_hourly(self, retention_days: int = 30):
+        await self.connect()
+        async with self.pool.acquire() as connection:
+            await connection.execute(
+                """
+                INSERT INTO market_scan_hourly(
+                    bucket_start, symbol, scans, buy_count, sell_count, hold_count,
+                    min_price, max_price, last_price, avg_rsi, ai_calls, ai_cost_usd, updated_at
+                )
+                WITH ticks AS (
+                    SELECT
+                        date_trunc('hour', to_timestamp(ts)) AS bucket_start,
+                        payload->>'symbol' AS symbol,
+                        payload->>'action' AS action,
+                        NULLIF(payload->>'price', '')::double precision AS price,
+                        NULLIF(payload->>'rsi', '')::double precision AS rsi,
+                        ts
+                    FROM audit_events
+                    WHERE kind = 'paper_tick'
+                      AND ts < extract(epoch FROM date_trunc('hour', now()))
+                      AND ts >= extract(epoch FROM now() - ($1::int * interval '1 day'))
+                      AND payload ? 'symbol'
+                ), last_prices AS (
+                    SELECT DISTINCT ON (bucket_start, symbol)
+                        bucket_start, symbol, price AS last_price
+                    FROM ticks
+                    ORDER BY bucket_start, symbol, ts DESC
+                ), grouped AS (
+                    SELECT
+                        bucket_start,
+                        symbol,
+                        count(*)::int AS scans,
+                        count(*) FILTER (WHERE action = 'buy')::int AS buy_count,
+                        count(*) FILTER (WHERE action = 'sell')::int AS sell_count,
+                        count(*) FILTER (WHERE action = 'hold')::int AS hold_count,
+                        min(price) AS min_price,
+                        max(price) AS max_price,
+                        avg(rsi) AS avg_rsi
+                    FROM ticks
+                    GROUP BY bucket_start, symbol
+                )
+                SELECT
+                    grouped.bucket_start, grouped.symbol, scans, buy_count, sell_count, hold_count,
+                    min_price, max_price, last_price, avg_rsi, 0, 0, now()
+                FROM grouped
+                JOIN last_prices USING(bucket_start, symbol)
+                ON CONFLICT(bucket_start, symbol) DO UPDATE SET
+                    scans = EXCLUDED.scans,
+                    buy_count = EXCLUDED.buy_count,
+                    sell_count = EXCLUDED.sell_count,
+                    hold_count = EXCLUDED.hold_count,
+                    min_price = EXCLUDED.min_price,
+                    max_price = EXCLUDED.max_price,
+                    last_price = EXCLUDED.last_price,
+                    avg_rsi = EXCLUDED.avg_rsi,
+                    updated_at = now()
+                """,
+                retention_days,
+            )
+
+    async def cleanup(self, retention_days: int = 30):
+        await self.connect()
+        async with self.pool.acquire() as connection:
+            await connection.execute(
+                """
+                DELETE FROM audit_events
+                WHERE kind = 'paper_tick'
+                  AND ts < extract(epoch FROM now() - ($1::int * interval '1 day'))
+                """,
+                retention_days,
+            )
 
     async def close(self):
         if self.pool is not None:

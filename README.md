@@ -66,3 +66,10 @@ PostgreSQL instead of local `crypto.db`. This preserves paper ticks, agent
 decisions, consensus, token usage, costs, and setup history across Railway
 redeploys. For Railway, use service references such as
 `${{Postgres.DATABASE_URL}}`; do not use `localhost`.
+
+
+By default, routine `paper_tick` audit rows are sampled every 300 seconds per
+symbol to control database growth. Buy/sell signals, errors, fills, AI decisions,
+and consensus are still recorded immediately. Detailed `paper_tick` rows are
+retained for 30 days and aggregated into `market_scan_hourly` for longer-term
+reporting.

@@ -31,6 +31,8 @@ class PaperWorker:
         self.risk_state = RiskState(self.broker.cash, self.broker.cash)
         self.orchestrator = Orchestrator(settings)
         self.last_ai_advisory_at: dict[str, float] = {}
+        self.last_audit_tick_at: dict[str, float] = {}
+        self.last_cleanup_at = 0.0
         self.last_tick_at = 0.0
         self.last_error = ""
 
@@ -44,7 +46,34 @@ class PaperWorker:
             return False, "ai_advisory_cooldown"
         return True, "ai_advisory_allowed"
 
+    def should_persist_tick(self, symbol: str, event: dict, now: float) -> bool:
+        if event.get("action") != "hold":
+            return True
+        if event.get("paper_fill") or event.get("exit_fill"):
+            return True
+        if event.get("reason") in {"market_data_error", "invalid_market_data"}:
+            return True
+        consensus = event.get("agent_consensus", {})
+        if not consensus.get("skipped", False):
+            return True
+        sample_seconds = self.settings.audit_paper_tick_sample_seconds
+        if sample_seconds <= 0:
+            return True
+        return now - self.last_audit_tick_at.get(symbol, 0) >= sample_seconds
+
+    async def maintain_audit_storage(self, now: float):
+        if now - self.last_cleanup_at < self.settings.audit_cleanup_interval_seconds:
+            return
+        aggregate = getattr(self.audit, "aggregate_hourly", None)
+        cleanup = getattr(self.audit, "cleanup", None)
+        if aggregate:
+            await aggregate(self.settings.audit_paper_tick_retention_days)
+        if cleanup:
+            await cleanup(self.settings.audit_paper_tick_retention_days)
+        self.last_cleanup_at = now
+
     async def tick(self, symbol: str) -> dict:
+        persisted = False
         try:
             result, candle_response = await asyncio.gather(self.client.ticker(symbol), self.client.candles(symbol))
             row = result["data"][0]
@@ -102,9 +131,15 @@ class PaperWorker:
                     event["agent_consensus"] = {"action":"hold","score":0,"approved":False,"reason_codes":[ai_reason],"skipped":True}
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
             event = {"symbol": symbol, "action": "hold", "reason": "market_data_error", "error_type": type(exc).__name__}
-        await self.audit.append("paper_tick", event)
-        self.last_tick_at = time.time()
+        now = time.time()
+        if self.should_persist_tick(symbol, event, now):
+            await self.audit.append("paper_tick", event)
+            self.last_audit_tick_at[symbol] = now
+            persisted = True
+        await self.maintain_audit_storage(now)
+        self.last_tick_at = now
         self.last_error = ""
+        event["audit_persisted"] = persisted
         self.risk_state.peak_equity=max(self.risk_state.peak_equity,self.broker.cash)
         self.state_store.save(self.broker.snapshot())
         log.info("paper_tick", extra=event)

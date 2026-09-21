@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     enable_paper_execution: bool = False
     ai_input_cost_per_million: float = Field(0.75, ge=0)
     ai_output_cost_per_million: float = Field(4.50, ge=0)
+    audit_paper_tick_sample_seconds: int = Field(300, ge=0)
+    audit_paper_tick_retention_days: int = Field(30, ge=1)
+    audit_cleanup_interval_seconds: int = Field(3600, ge=60)
 
     @model_validator(mode="after")
     def guard_live(self):
