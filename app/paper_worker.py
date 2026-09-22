@@ -142,10 +142,14 @@ class PaperWorker:
 
     async def _sync_exchange_portfolio(self, force: bool = False) -> dict | None:
         """Read the real OKX account without enabling any trading operation."""
-        if not self.settings.okx_account_sync:
+        if not getattr(self.settings, "okx_account_sync", False):
             self.exchange_sync_step = "disabled"
             return None
-        if not all((self.settings.okx_api_key, self.settings.okx_secret_key, self.settings.okx_passphrase)):
+        if not all((
+            getattr(self.settings, "okx_api_key", ""),
+            getattr(self.settings, "okx_secret_key", ""),
+            getattr(self.settings, "okx_passphrase", ""),
+        )):
             self.exchange_sync_error = "okx_account_credentials_missing"
             self.exchange_sync_step = "credentials_missing"
             return None
@@ -507,6 +511,7 @@ class PaperWorker:
 
     async def ai_probe(self, symbol: str) -> dict:
         """Operator-triggered single AI round on live data; bypasses the advisory cooldown."""
+        await self._sync_exchange_portfolio(force=True)
         result, candle_response, orderbook_response = await asyncio.gather(
             self.client.ticker(symbol), self.client.candles(symbol), self.client.order_book(symbol), return_exceptions=True
         )
@@ -582,6 +587,7 @@ class PaperWorker:
     async def tick(self, symbol: str) -> dict:
         persisted = False
         try:
+            await self._sync_exchange_portfolio()
             result, candle_response, orderbook_response = await asyncio.gather(
                 self.client.ticker(symbol), self.client.candles(symbol), self.client.order_book(symbol), return_exceptions=True
             )
