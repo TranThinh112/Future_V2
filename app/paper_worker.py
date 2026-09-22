@@ -183,6 +183,15 @@ class PaperWorker:
                     if notional is None and mark is not None:
                         notional = abs(quantity * mark)
                     total_unrealized += upl
+                    opened_ms = self._finite(raw.get("cTime"))
+                    opened_at = (
+                        datetime.fromtimestamp(opened_ms / 1000, UTC).isoformat(timespec="seconds")
+                        if opened_ms
+                        else None
+                    )
+                    margin = self._finite(raw.get("imr"))
+                    if margin is None:
+                        margin = self._finite(raw.get("margin"))
                     positions[symbol] = {
                         "symbol": symbol,
                         "side": raw.get("posSide") or ("short" if quantity < 0 else "long"),
@@ -196,13 +205,13 @@ class PaperWorker:
                         "take_profit": None,
                         "stop_distance_pct": None,
                         "target_distance_pct": None,
-                        "opened_at": raw.get("cTime"),
-                        "age_seconds": None,
+                        "opened_at": opened_at,
+                        "age_seconds": round(time.time() - opened_ms / 1000, 3) if opened_ms else None,
                         "liquidation_price": self._finite(raw.get("liqPx")),
                         "liquidation_note": "from_okx_account_positions",
                         "protection_status": "exchange_position_read_only",
                         "inst_type": raw.get("instType"),
-                        "margin": self._finite(raw.get("margin")),
+                        "margin": margin,
                         "leverage": self._finite(raw.get("lever")),
                     }
                     if notional is not None:
@@ -214,7 +223,7 @@ class PaperWorker:
                 equity = total_equity if total_equity is not None else (self._finite(usdt.get("eq")) or cash)
                 if equity is None:
                     raise ValueError("okx_balance_equity_missing")
-                margin_used = sum(self._finite(item.get("margin")) or 0.0 for item in positions.values())
+                margin_used = sum(item["margin"] or 0.0 for item in positions.values())
                 self.exchange_portfolio = {
                     "cash": cash or 0.0,
                     "available_cash": cash or 0.0,
