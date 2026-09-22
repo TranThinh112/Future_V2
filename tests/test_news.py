@@ -38,7 +38,7 @@ def test_news_service_normalizes_articles_and_sentiment(monkeypatch):
             return payload
 
     class FakeClient:
-        def __init__(self, timeout):
+        def __init__(self, timeout, follow_redirects=False):
             self.timeout = timeout
 
         async def __aenter__(self):
@@ -64,7 +64,7 @@ def test_news_service_normalizes_articles_and_sentiment(monkeypatch):
 
 def test_news_service_provider_error_is_unavailable(monkeypatch):
     class FakeClient:
-        def __init__(self, timeout):
+        def __init__(self, timeout, follow_redirects=False):
             self.timeout = timeout
 
         async def __aenter__(self):
@@ -88,6 +88,24 @@ def test_news_service_empty_payload_is_unavailable():
     assert news["reason"] == "no_recent_news"
 
 
+def test_news_service_parses_rss_and_filters_by_symbol():
+    xml = """<?xml version="1.0"?><rss><channel>
+      <item><title>Bitcoin ETF inflows surge</title><description>BTC adoption rises.</description><link>https://example.test/btc</link><pubDate>Tue, 22 Sep 2026 10:00:00 GMT</pubDate></item>
+      <item><title>Ethereum developers ship upgrade</title><description>ETH network gains.</description><link>https://example.test/eth</link><pubDate>Tue, 22 Sep 2026 09:00:00 GMT</pubDate></item>
+    </channel></rss>"""
+    items = NewsService.parse_rss(xml, "BTC-USDT")
+    assert items[0]["title"] == "Bitcoin ETF inflows surge"
+    assert items[0]["sentiment"] == "bullish"
+    assert items[0]["relevance"] == 1.0
+    assert items[0]["published_at"].endswith("+00:00")
+
+
+def test_news_service_infers_high_risk_bearish_sentiment():
+    assert NewsService.infer_sentiment("exchange hack causes market drop") == "bearish"
+    assert NewsService.infer_sentiment("institutional inflows and adoption rise") == "bullish"
+    assert NewsService.infer_sentiment("market remains unchanged") == "neutral"
+
+
 def test_news_service_caches_successful_results(monkeypatch):
     calls = {"count": 0}
 
@@ -99,7 +117,7 @@ def test_news_service_caches_successful_results(monkeypatch):
             return [{"title": "Steady market", "sentiment": "neutral"}]
 
     class FakeClient:
-        def __init__(self, timeout):
+        def __init__(self, timeout, follow_redirects=False):
             self.timeout = timeout
 
         async def __aenter__(self):

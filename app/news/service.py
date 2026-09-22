@@ -1,7 +1,10 @@
 import re
 import time
 from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
+from html import unescape
 from typing import Any
+from xml.etree import ElementTree
 
 import httpx
 
@@ -54,12 +57,62 @@ class NewsService:
             "lookback_minutes": str(self.lookback_minutes),
         }
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(8, connect=3)) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(8, connect=3), follow_redirects=True) as client:
                 response = await client.get(self.provider_url, params=params, headers=headers)
                 response.raise_for_status()
+                content_type = getattr(response, "headers", {}).get("content-type", "").lower()
+                body = getattr(response, "text", "").lstrip()
+                if "xml" in content_type or body.startswith("<"):
+                    return self.normalize(self.parse_rss(body, symbol), symbol)
                 return self.normalize(response.json(), symbol)
-        except (httpx.HTTPError, ValueError, TypeError, KeyError):
+        except (httpx.HTTPError, ValueError, TypeError, KeyError, ElementTree.ParseError):
             return self.unavailable("news_provider_error", symbol)
+
+    @staticmethod
+    def parse_rss(xml: str, symbol: str) -> list[dict[str, Any]]:
+        root = ElementTree.fromstring(xml)
+        query_terms = {symbol.split("-")[0].lower()}
+        if symbol == "BTC-USDT":
+            query_terms.update({"bitcoin", "btc"})
+        elif symbol == "ETH-USDT":
+            query_terms.update({"ethereum", "ether", "eth"})
+        items = []
+        for entry in root.findall(".//item"):
+            title = re.sub(r"\s+", " ", unescape(entry.findtext("title", ""))).strip()
+            summary = re.sub(r"\s+", " ", unescape(entry.findtext("description", ""))).strip()
+            text = f"{title} {summary}".lower()
+            if not title and not summary:
+                continue
+            relevance = 1.0 if any(term in text for term in query_terms) else 0.5
+            published = entry.findtext("pubDate", "").strip()
+            try:
+                published = parsedate_to_datetime(published).astimezone(UTC).isoformat() if published else None
+            except (TypeError, ValueError, OverflowError):
+                published = published or None
+            sentiment = NewsService.infer_sentiment(text)
+            items.append({
+                "title": title,
+                "summary": summary,
+                "source": "CoinDesk RSS",
+                "published_at": published,
+                "url": entry.findtext("link", "").strip(),
+                "sentiment": sentiment,
+                "relevance": relevance,
+            })
+        items.sort(key=lambda item: (item["relevance"], item["published_at"] or ""), reverse=True)
+        return items
+
+    @staticmethod
+    def infer_sentiment(text: str) -> str:
+        bullish = ("surge", "rally", "rise", "gain", "inflow", " bullish", "record high", "adoption")
+        bearish = ("crash", "drop", "fall", "outflow", "bearish", "hack", "exploit", "ban", "lawsuit")
+        bullish_score = sum(text.count(term) for term in bullish)
+        bearish_score = sum(text.count(term) for term in bearish)
+        if bullish_score > bearish_score:
+            return "bullish"
+        if bearish_score > bullish_score:
+            return "bearish"
+        return "neutral"
 
     @staticmethod
     def unavailable(reason: str, symbol: str = "") -> dict[str, Any]:
