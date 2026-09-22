@@ -58,6 +58,8 @@ class PaperWorker:
         self.exchange_sync_error = ""
         self.exchange_sync_at = 0.0
         self.exchange_sync_lock = asyncio.Lock()
+        self.exchange_sync_attempts = 0
+        self.exchange_sync_step = ""
 
     def should_call_ai(self, symbol: str, decision: dict, now: float) -> tuple[bool, str]:
         if not self.settings.enable_ai_advisory:
@@ -141,9 +143,11 @@ class PaperWorker:
     async def _sync_exchange_portfolio(self, force: bool = False) -> dict | None:
         """Read the real OKX account without enabling any trading operation."""
         if not self.settings.okx_account_sync:
+            self.exchange_sync_step = "disabled"
             return None
         if not all((self.settings.okx_api_key, self.settings.okx_secret_key, self.settings.okx_passphrase)):
             self.exchange_sync_error = "okx_account_credentials_missing"
+            self.exchange_sync_step = "credentials_missing"
             return None
         if not force and time.time() - self.exchange_sync_at < self.interval:
             return self.exchange_portfolio
@@ -151,9 +155,12 @@ class PaperWorker:
             if not force and time.time() - self.exchange_sync_at < self.interval:
                 return self.exchange_portfolio
             try:
+                self.exchange_sync_attempts += 1
+                self.exchange_sync_step = "requesting_private_api"
                 balance_response, positions_response = await asyncio.gather(
                     self.client.balances(), self.client.positions()
                 )
+                self.exchange_sync_step = "parsing_response"
                 balance = (balance_response.get("data") or [{}])[0]
                 details = balance.get("details") or []
                 usdt = next((item for item in details if item.get("ccy") == "USDT"), {})
@@ -223,10 +230,12 @@ class PaperWorker:
                 }
                 self.exchange_sync_at = time.time()
                 self.exchange_sync_error = ""
+                self.exchange_sync_step = "synced"
                 return self.exchange_portfolio
             except (httpx.HTTPError, KeyError, TypeError, ValueError, OSError) as exc:
                 self.exchange_sync_error = f"{type(exc).__name__}: {exc}"
-                log.warning("okx_account_sync_failed", extra={"error_type": type(exc).__name__})
+                self.exchange_sync_step = "failed"
+                log.warning("okx_account_sync_failed", extra={"error_type": type(exc).__name__, "error": str(exc)[:200]})
                 return self.exchange_portfolio
 
     def _risk_context(self, equity: float, symbol: str, spread: float, slippage: float | None) -> dict:

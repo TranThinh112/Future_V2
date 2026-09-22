@@ -154,6 +154,15 @@ def _okx_account_status():
         "available_cash": portfolio.get("available_cash") if portfolio else None,
         "unrealized_pnl": portfolio.get("unrealized_pnl") if portfolio else None,
         "sync_error": getattr(worker, "exchange_sync_error", ""),
+        "worker_sync_enabled": bool(getattr(worker, "settings", None) and getattr(worker.settings, "okx_account_sync", None)),
+        "worker_credentials_configured": bool(
+            getattr(worker, "settings", None)
+            and worker.settings.okx_api_key
+            and worker.settings.okx_secret_key
+            and worker.settings.okx_passphrase
+        ),
+        "sync_attempts": getattr(worker, "exchange_sync_attempts", 0),
+        "last_sync_step": getattr(worker, "exchange_sync_step", ""),
     }
 
 EVENT_CAPS={"consensus":30,"agent_decision":120,"paper_tick":60}
