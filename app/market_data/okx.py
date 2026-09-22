@@ -10,8 +10,9 @@ import httpx
 REDACTED = "***"
 
 class OKXClient:
-    def __init__(self, api_key="", secret_key="", passphrase="", demo=True, base_url="https://www.okx.com"):
+    def __init__(self, api_key="", secret_key="", passphrase="", demo=True, base_url="https://www.okx.com", read_only=True):
         self.api_key,self.secret_key,self.passphrase,self.demo=api_key,secret_key,passphrase,demo; self.base_url=base_url
+        self.read_only = read_only
     def sign(self, timestamp, method, path, body=""):
         msg=f"{timestamp}{method.upper()}{path}{body}".encode(); return base64.b64encode(hmac.new(self.secret_key.encode(),msg,hashlib.sha256).digest()).decode()
     def private_ws_login_message(self, timestamp=None):
@@ -47,7 +48,10 @@ class OKXClient:
     async def create_order(self, body):
         self.validate_symbol(body.get("instId", ""))
         if body.get("tdMode") != "cash": raise ValueError("spot_orders_must_use_cash_mode")
+        if self.read_only: raise PermissionError("okx_client_read_only")
         return await self.request("POST","/api/v5/trade/order",body=body,private=True)
-    async def cancel_order(self, symbol, order_id): return await self.request("POST","/api/v5/trade/cancel-order",body={"instId":symbol,"ordId":order_id},private=True)
+    async def cancel_order(self, symbol, order_id):
+        if self.read_only: raise PermissionError("okx_client_read_only")
+        return await self.request("POST","/api/v5/trade/cancel-order",body={"instId":symbol,"ordId":order_id},private=True)
     async def order_status(self, symbol, order_id): return await self.request("GET","/api/v5/trade/order",params={"instId":symbol,"ordId":order_id},private=True)
     async def trades(self, symbol, limit=100): return await self.request("GET","/api/v5/market/trades",params={"instId":symbol,"limit":str(limit)})

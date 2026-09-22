@@ -1,3 +1,5 @@
+import asyncio
+
 from app.execution.paper import PaperBroker
 from app.strategy import signal
 
@@ -88,3 +90,36 @@ def test_realized_pnl_and_proposal_context():
     assert proposal["quantity"] == 10.0
     assert proposal["position_pct"] == 0.1
     assert worker._proposal_context(snapshot, {"action": "hold", "reason": "no_conservative_setup"}, 10000.0, None)["data_quality"] == "not_applicable"
+
+def test_portfolio_context_prefers_read_only_exchange_snapshot():
+    from app.paper_worker import PaperWorker
+
+    worker = object.__new__(PaperWorker)
+    worker.broker = PaperBroker()
+    worker.settings = type("Settings", (), {"max_position_pct": 0.1})()
+    worker.close_history = {}
+    worker.exchange_portfolio = {
+        "cash": 4200.0,
+        "equity": 10000.0,
+        "positions": {"BTC-USDT-SWAP": {"quantity": -0.1, "unrealized_pnl": 12.5}},
+        "position_count": 1,
+        "source": "okx_private_account_read_only",
+        "data_quality": "good",
+    }
+    context = worker._portfolio_context({"BTC-USDT": 100.0})
+    assert context["position_count"] == 1
+    assert context["source"] == "okx_private_account_read_only"
+    assert context["cash"] == 4200.0
+
+
+def test_exchange_sync_skips_without_credentials():
+    from app.paper_worker import PaperWorker
+
+    worker = object.__new__(PaperWorker)
+    worker.interval = 30
+    worker.exchange_portfolio = None
+    worker.exchange_sync_error = ""
+    worker.exchange_sync_at = 0.0
+    worker.settings = type("Settings", (), {"okx_account_sync": True, "okx_api_key": "", "okx_secret_key": "", "okx_passphrase": ""})()
+    assert asyncio.run(worker._sync_exchange_portfolio(force=True)) is None
+    assert worker.exchange_sync_error == "okx_account_credentials_missing"

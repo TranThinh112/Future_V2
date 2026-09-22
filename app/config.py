@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     ai_advisory_cooldown_seconds: int = Field(900, ge=0)
     ai_advisory_on_hold: bool = False
     enable_paper_execution: bool = False
+    okx_account_sync: bool = True
+    okx_read_only: bool = True
     ai_input_cost_per_million: float = Field(0.75, ge=0)
     ai_output_cost_per_million: float = Field(4.50, ge=0)
     audit_paper_tick_sample_seconds: int = Field(300, ge=0)

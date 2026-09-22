@@ -88,9 +88,11 @@ def portfolio():
 
 def _portfolio_payload():
     if not worker: return {"available":False}
+    exchange_portfolio = getattr(worker, "exchange_portfolio", None)
+    if exchange_portfolio is not None:
+        return {"available": True, **exchange_portfolio, "sync_error": worker.exchange_sync_error}
     prices={fill["symbol"]:fill["price"] for fill in worker.broker.fills}
-    return {"available":True,"cash":worker.broker.cash,"equity":worker.broker.equity(prices),"positions":[vars(p) for p in worker.broker.positions.values()],"fills":worker.broker.fills[-20:]}
-
+    return {"available":True,"source":"paper_broker","cash":worker.broker.cash,"equity":worker.broker.equity(prices),"positions":[vars(p) for p in worker.broker.positions.values()],"fills":worker.broker.fills[-20:],"sync_error":getattr(worker,"exchange_sync_error","")}
 def acquire_read_repository():
     """Reuse one pooled Postgres repository; sqlite keeps a per-request connection."""
     global read_repository
@@ -131,8 +133,27 @@ def runtime():
             "ai_consensus_cost_totals": True,
             "paper_execution": settings.enable_paper_execution,
             "live_trading": settings.enable_live_trading,
+            "okx_account_sync": settings.okx_account_sync,
+            "okx_read_only": settings.okx_read_only,
             "withdrawals": False,
         },
+        "okx_account": _okx_account_status(),
+    }
+
+
+def _okx_account_status():
+    """Non-secret operator status for the read-only OKX account sync."""
+    portfolio = getattr(worker, "exchange_portfolio", None)
+    return {
+        "sync_enabled": bool(settings.okx_account_sync),
+        "credentials_configured": bool(settings.okx_api_key and settings.okx_secret_key and settings.okx_passphrase),
+        "synced": portfolio is not None,
+        "synced_at": portfolio.get("synced_at") if portfolio else None,
+        "position_count": portfolio.get("position_count") if portfolio else None,
+        "equity": portfolio.get("equity") if portfolio else None,
+        "available_cash": portfolio.get("available_cash") if portfolio else None,
+        "unrealized_pnl": portfolio.get("unrealized_pnl") if portfolio else None,
+        "sync_error": getattr(worker, "exchange_sync_error", ""),
     }
 
 EVENT_CAPS={"consensus":30,"agent_decision":120,"paper_tick":60}

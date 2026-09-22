@@ -30,7 +30,14 @@ class PaperWorker:
         if settings.trading_mode != TradingMode.paper:
             raise ValueError("PaperWorker can only run in paper mode")
         self.settings, self.interval, self.running = settings, interval_seconds, False
-        self.client, self.audit = OKXClient(demo=False), repository_from_url(settings.database_url)
+        self.client = OKXClient(
+            settings.okx_api_key,
+            settings.okx_secret_key,
+            settings.okx_passphrase,
+            demo=settings.okx_demo_trading,
+            read_only=settings.okx_read_only,
+        )
+        self.audit = repository_from_url(settings.database_url)
         self.state_store = JsonStore()
         self.broker = PaperBroker.restore(self.state_store.load({}))
         self.risk_state = RiskState(self.broker.cash, self.broker.cash)
@@ -47,6 +54,10 @@ class PaperWorker:
         self.last_cleanup_at = 0.0
         self.last_tick_at = 0.0
         self.last_error = ""
+        self.exchange_portfolio: dict | None = None
+        self.exchange_sync_error = ""
+        self.exchange_sync_at = 0.0
+        self.exchange_sync_lock = asyncio.Lock()
 
     def should_call_ai(self, symbol: str, decision: dict, now: float) -> tuple[bool, str]:
         if not self.settings.enable_ai_advisory:
@@ -85,6 +96,8 @@ class PaperWorker:
         }
 
     def _portfolio_context(self, prices: dict[str, float]) -> dict:
+        if getattr(self, "exchange_portfolio", None) is not None:
+            return self.exchange_portfolio
         equity = self.broker.equity(prices)
         positions = {}
         exposure = {}
@@ -124,6 +137,97 @@ class PaperWorker:
             "execution": self._fills_context(),
             "data_quality": "good",
         }
+
+    async def _sync_exchange_portfolio(self, force: bool = False) -> dict | None:
+        """Read the real OKX account without enabling any trading operation."""
+        if not self.settings.okx_account_sync:
+            return None
+        if not all((self.settings.okx_api_key, self.settings.okx_secret_key, self.settings.okx_passphrase)):
+            self.exchange_sync_error = "okx_account_credentials_missing"
+            return None
+        if not force and time.time() - self.exchange_sync_at < self.interval:
+            return self.exchange_portfolio
+        async with self.exchange_sync_lock:
+            if not force and time.time() - self.exchange_sync_at < self.interval:
+                return self.exchange_portfolio
+            try:
+                balance_response, positions_response = await asyncio.gather(
+                    self.client.balances(), self.client.positions()
+                )
+                balance = (balance_response.get("data") or [{}])[0]
+                details = balance.get("details") or []
+                usdt = next((item for item in details if item.get("ccy") == "USDT"), {})
+                positions = {}
+                exposure = {}
+                total_unrealized = 0.0
+                for raw in positions_response.get("data") or []:
+                    quantity = self._finite(raw.get("pos")) or 0.0
+                    if abs(quantity) <= 0:
+                        continue
+                    symbol = str(raw.get("instId") or "")
+                    mark = self._finite(raw.get("markPx"))
+                    entry = self._finite(raw.get("avgPx"))
+                    upl = self._finite(raw.get("upl")) or 0.0
+                    notional = self._finite(raw.get("notionalUsd"))
+                    if notional is None and mark is not None:
+                        notional = abs(quantity * mark)
+                    total_unrealized += upl
+                    positions[symbol] = {
+                        "symbol": symbol,
+                        "side": raw.get("posSide") or ("short" if quantity < 0 else "long"),
+                        "quantity": quantity,
+                        "entry_price": entry,
+                        "mark_price": mark,
+                        "position_value": notional,
+                        "unrealized_pnl": upl,
+                        "unrealized_pnl_pct": self._finite(raw.get("uplRatio")),
+                        "stop_loss": None,
+                        "take_profit": None,
+                        "stop_distance_pct": None,
+                        "target_distance_pct": None,
+                        "opened_at": raw.get("cTime"),
+                        "age_seconds": None,
+                        "liquidation_price": self._finite(raw.get("liqPx")),
+                        "liquidation_note": "from_okx_account_positions",
+                        "protection_status": "exchange_position_read_only",
+                        "inst_type": raw.get("instType"),
+                        "margin": self._finite(raw.get("margin")),
+                        "leverage": self._finite(raw.get("lever")),
+                    }
+                    if notional is not None:
+                        exposure[symbol] = notional
+                total_equity = self._finite(balance.get("totalEq"))
+                cash = self._finite(usdt.get("availEq"))
+                if cash is None:
+                    cash = self._finite(usdt.get("availBal")) or self._finite(usdt.get("cashBal"))
+                equity = total_equity if total_equity is not None else (self._finite(usdt.get("eq")) or cash)
+                if equity is None:
+                    raise ValueError("okx_balance_equity_missing")
+                margin_used = sum(self._finite(item.get("margin")) or 0.0 for item in positions.values())
+                self.exchange_portfolio = {
+                    "cash": cash or 0.0,
+                    "available_cash": cash or 0.0,
+                    "equity": equity,
+                    "positions": positions,
+                    "exposure_pct": {key: value / equity for key, value in exposure.items()},
+                    "total_exposure_pct": sum(exposure.values()) / equity if equity else 0.0,
+                    "concentration_pct": max(exposure.values()) / equity if exposure and equity else 0.0,
+                    "position_count": len(positions),
+                    "unrealized_pnl": total_unrealized,
+                    "margin_used": margin_used,
+                    "correlation": self._correlation(),
+                    "execution": {"count": None, "recent": [], "fee_pct": None, "last_fill": None, "data_quality": "not_requested", "realized_pnl": None},
+                    "source": "okx_private_account_read_only",
+                    "data_quality": "good",
+                    "synced_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                }
+                self.exchange_sync_at = time.time()
+                self.exchange_sync_error = ""
+                return self.exchange_portfolio
+            except (httpx.HTTPError, KeyError, TypeError, ValueError, OSError) as exc:
+                self.exchange_sync_error = f"{type(exc).__name__}: {exc}"
+                log.warning("okx_account_sync_failed", extra={"error_type": type(exc).__name__})
+                return self.exchange_portfolio
 
     def _risk_context(self, equity: float, symbol: str, spread: float, slippage: float | None) -> dict:
         return {
