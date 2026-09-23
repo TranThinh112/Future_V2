@@ -123,3 +123,26 @@ def test_exchange_sync_skips_without_credentials():
     worker.settings = type("Settings", (), {"okx_account_sync": True, "okx_api_key": "", "okx_secret_key": "", "okx_passphrase": ""})()
     assert asyncio.run(worker._sync_exchange_portfolio(force=True)) is None
     assert worker.exchange_sync_error == "okx_account_credentials_missing"
+
+def test_ai_precheck_blocks_unfunded_buy_without_agent_calls():
+    from app.paper_worker import PaperWorker
+
+    worker = object.__new__(PaperWorker)
+    worker.settings = type("Settings", (), {"ai_precheck_enabled": True, "max_position_pct": 0.1, "openai_model": "gpt-test"})()
+    proposal = {"action": "buy", "data_quality": "good", "notional": 100.0, "position_pct": 0.05, "max_position_pct": 0.1}
+    portfolio = {"available_cash": 1.0, "cash": 1.0}
+    orderbook = {"data_quality": "good"}
+    risk = {"data_quality": "good", "api_healthy": True, "liquidity_ok": True}
+    assert worker._ai_precheck_reason(proposal, portfolio, orderbook, risk) == "proposal_notional_exceeds_available_cash"
+
+
+def test_ai_precheck_allows_funded_buy():
+    from app.paper_worker import PaperWorker
+
+    worker = object.__new__(PaperWorker)
+    worker.settings = type("Settings", (), {"ai_precheck_enabled": True, "max_position_pct": 0.1, "openai_model": "gpt-test"})()
+    proposal = {"action": "buy", "data_quality": "good", "notional": 1.0, "position_pct": 0.05, "max_position_pct": 0.1}
+    portfolio = {"available_cash": 10.0, "cash": 10.0}
+    orderbook = {"data_quality": "good"}
+    risk = {"data_quality": "good", "api_healthy": True, "liquidity_ok": True}
+    assert worker._ai_precheck_reason(proposal, portfolio, orderbook, risk) == ""

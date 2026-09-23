@@ -19,6 +19,7 @@ from app.market_data.service import Snapshot, candles_frame, validate_snapshot
 from app.news.service import NewsService
 from app.orchestrator import Orchestrator
 from app.risk.state import RiskState
+from app.schemas import Consensus
 from app.storage.json_store import JsonStore
 from app.storage.repository import repository_from_url
 from app.strategy import signal
@@ -470,6 +471,57 @@ class PaperWorker:
             },
         }
 
+
+    def _ai_precheck_reason(self, proposal: dict, portfolio: dict, orderbook: dict, risk: dict) -> str:
+        if not getattr(self.settings, "ai_precheck_enabled", True):
+            return ""
+        if proposal.get("action") == "hold":
+            return str(proposal.get("reason") or "deterministic_hold")
+        if proposal.get("data_quality") != "good":
+            return f"proposal_data_quality_{proposal.get('data_quality')}"
+        if orderbook.get("data_quality") != "good":
+            return f"orderbook_data_quality_{orderbook.get('data_quality')}"
+        if risk.get("data_quality") != "good":
+            return f"risk_data_quality_{risk.get('data_quality')}"
+        if risk.get("api_healthy") is False:
+            return "api_unhealthy"
+        if risk.get("liquidity_ok") is False:
+            return "orderbook_liquidity_bad"
+        notional = self._finite(proposal.get("notional")) or 0.0
+        available_cash = self._finite(portfolio.get("available_cash"))
+        if available_cash is None:
+            available_cash = self._finite(portfolio.get("cash"))
+        if proposal.get("action") == "buy" and available_cash is not None and notional > max(available_cash, 0):
+            return "proposal_notional_exceeds_available_cash"
+        position_pct = self._finite(proposal.get("position_pct"))
+        max_position_pct = self._finite(proposal.get("max_position_pct")) or self.settings.max_position_pct
+        if position_pct is not None and max_position_pct is not None and position_pct > max_position_pct:
+            return "proposal_position_pct_exceeds_max_position_pct"
+        return ""
+
+    async def _persist_precheck_consensus(self, round_id: str, symbol: str, decision: dict, agent_snapshot: dict, reason: str):
+        consensus = Consensus(symbol=symbol, action="hold", score=0, approved=False, votes=[], reason_codes=["ai_precheck_skipped", reason])
+        event = consensus.model_dump()
+        event["round_id"] = round_id
+        event["deterministic_decision"] = decision
+        event["input_context"] = agent_snapshot
+        event["early_stop"] = {
+            "precheck": True,
+            "reason": reason,
+            "called_agents": [],
+            "skipped_agents": ["RUNE", "OKAPI", "ZEPHR", "LUMEN", "TIDAL", "NORO", "VESKA", "MARIN"],
+        }
+        event["ai_usage"] = {
+            "agent_count": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "estimated_cost_usd": 0.0,
+            "model": self.settings.openai_model,
+        }
+        await self.audit.append("consensus", event)
+        return consensus, [], agent_snapshot
+
     async def _fetch_news(self, symbol: str) -> dict:
         try:
             return await self.news.fetch(symbol)
@@ -491,6 +543,10 @@ class PaperWorker:
         agent_snapshot = self._agent_snapshot(
             symbol, snapshot, values, row, orderbook, spread, portfolio, risk, news, proposal, candles
         )
+        precheck_reason = self._ai_precheck_reason(proposal, portfolio, orderbook, risk)
+        if precheck_reason:
+            self.last_ai_advisory_at[symbol] = time.time()
+            return await self._persist_precheck_consensus(round_id, symbol, decision, agent_snapshot, precheck_reason)
         ai_audit_events = []
 
         def audit_agent_decision(decision_event):

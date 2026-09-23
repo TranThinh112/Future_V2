@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     enable_ai_advisory: bool = False
     ai_advisory_cooldown_seconds: int = Field(900, ge=0)
     ai_advisory_on_hold: bool = False
+    ai_precheck_enabled: bool = True
+    ai_early_stop_enabled: bool = True
+    ai_early_stop_on_degraded: bool = True
+    ai_early_stop_on_hard_hold: bool = True
     enable_paper_execution: bool = False
     okx_account_sync: bool = True
     okx_read_only: bool = True

@@ -10,4 +10,16 @@ class Orchestrator:
             settings.ai_input_cost_per_million,
             settings.ai_output_cost_per_million,
         )
-    async def decision(self, snapshot, on_agent_decision=None): return await analyze(snapshot,self.agents,on_agent_decision)
+        self.early_stop = settings.ai_early_stop_enabled
+        self.stop_on_degraded = settings.ai_early_stop_on_degraded
+        self.stop_on_hard_hold = settings.ai_early_stop_on_hard_hold
+
+    async def decision(self, snapshot, on_agent_decision=None):
+        return await analyze(
+            snapshot,
+            self.agents,
+            on_agent_decision,
+            early_stop=self.early_stop,
+            stop_on_degraded=self.stop_on_degraded,
+            stop_on_hard_hold=self.stop_on_hard_hold,
+        )
