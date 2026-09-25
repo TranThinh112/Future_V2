@@ -394,14 +394,22 @@ class PaperWorker:
             "data_quality": "good",
         }
 
-    def _proposal_context(self, snapshot, decision: dict, equity: float, buy_slippage: float | None) -> dict:
+    def _proposal_context(self, snapshot, decision: dict, portfolio: dict, buy_slippage: float | None) -> dict:
+        """Size the proposal against the funded account, not the paper ledger."""
         entry = self._finite(snapshot.last)
         stop, target = self._finite(decision.get("stop_loss")), self._finite(decision.get("take_profit"))
         action = decision.get("action")
+        equity = self._finite(portfolio.get("equity"))
+        available = self._finite(portfolio.get("available_cash"))
+        if available is None:
+            available = self._finite(portfolio.get("cash"))
+        capital_cap = equity * self.settings.max_position_pct if equity else None
+        if available is not None:
+            capital_cap = available if capital_cap is None else min(capital_cap, available)
         quantity = notional = position_pct = risk_reward = None
-        if action == "buy" and entry and stop and entry > stop:
-            risk_amount = equity * self.settings.risk_per_trade_pct
-            quantity = min(risk_amount / (entry - stop), self.broker.cash * self.settings.max_position_pct / entry)
+        if action == "buy" and entry and stop and entry > stop and capital_cap:
+            risk_amount = (equity or 0.0) * self.settings.risk_per_trade_pct
+            quantity = min(risk_amount / (entry - stop), capital_cap / entry)
             notional = quantity * entry
             position_pct = notional / equity if equity else None
             if target and target > entry:
@@ -539,7 +547,7 @@ class PaperWorker:
         slippage = orderbook.get("estimated_buy_slippage_pct")
         risk = self._risk_context(portfolio["equity"], symbol, spread, slippage)
         news = await self._fetch_news(symbol)
-        proposal = self._proposal_context(snapshot, decision, portfolio["equity"], slippage)
+        proposal = self._proposal_context(snapshot, decision, portfolio, slippage)
         agent_snapshot = self._agent_snapshot(
             symbol, snapshot, values, row, orderbook, spread, portfolio, risk, news, proposal, candles
         )

@@ -84,12 +84,27 @@ def test_realized_pnl_and_proposal_context():
     worker.broker = PaperBroker()
     worker.settings = type("Settings", (), {"max_position_pct": 0.1, "risk_per_trade_pct": 0.005, "enable_paper_execution": False})()
     snapshot = type("Snapshot", (), {"last": 100.0})()
-    proposal = worker._proposal_context(snapshot, {"action": "buy", "reason": "trend_momentum", "stop_loss": 95.0, "take_profit": 115.0}, 10000.0, 0.0002)
+    funded = {"equity": 10000.0, "cash": 10000.0, "available_cash": 10000.0}
+    proposal = worker._proposal_context(snapshot, {"action": "buy", "reason": "trend_momentum", "stop_loss": 95.0, "take_profit": 115.0}, funded, 0.0002)
     assert proposal["data_quality"] == "good"
     assert proposal["risk_reward_ratio"] == 3.0
     assert proposal["quantity"] == 10.0
     assert proposal["position_pct"] == 0.1
-    assert worker._proposal_context(snapshot, {"action": "hold", "reason": "no_conservative_setup"}, 10000.0, None)["data_quality"] == "not_applicable"
+    assert worker._proposal_context(snapshot, {"action": "hold", "reason": "no_conservative_setup"}, funded, None)["data_quality"] == "not_applicable"
+
+def test_proposal_context_sizes_against_funded_account():
+    from app.paper_worker import PaperWorker
+
+    worker = object.__new__(PaperWorker)
+    worker.broker = PaperBroker()
+    worker.settings = type("Settings", (), {"max_position_pct": 0.1, "risk_per_trade_pct": 0.005, "enable_paper_execution": False})()
+    snapshot = type("Snapshot", (), {"last": 84000.0})()
+    account = {"equity": 15.45, "cash": 18.86, "available_cash": 6.55}
+    proposal = worker._proposal_context(snapshot, {"action": "buy", "reason": "trend_momentum", "stop_loss": 83900.0, "take_profit": 84200.0}, account, 0.0)
+    assert proposal["notional"] <= account["available_cash"]
+    assert proposal["position_pct"] <= worker.settings.max_position_pct
+    risk = {"data_quality": "good", "api_healthy": True, "liquidity_ok": True}
+    assert worker._ai_precheck_reason(proposal, account, {"data_quality": "good"}, risk) == ""
 
 def test_portfolio_context_prefers_read_only_exchange_snapshot():
     from app.paper_worker import PaperWorker
