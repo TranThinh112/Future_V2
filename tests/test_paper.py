@@ -82,14 +82,14 @@ def test_realized_pnl_and_proposal_context():
 
     worker = object.__new__(PaperWorker)
     worker.broker = PaperBroker()
-    worker.settings = type("Settings", (), {"max_position_pct": 0.1, "risk_per_trade_pct": 0.005, "enable_paper_execution": False})()
+    worker.settings = type("Settings", (), {"max_position_pct": 0.1, "position_size_headroom": 0.95, "risk_per_trade_pct": 0.005, "enable_paper_execution": False})()
     snapshot = type("Snapshot", (), {"last": 100.0})()
     funded = {"equity": 10000.0, "cash": 10000.0, "available_cash": 10000.0}
     proposal = worker._proposal_context(snapshot, {"action": "buy", "reason": "trend_momentum", "stop_loss": 95.0, "take_profit": 115.0}, funded, 0.0002)
     assert proposal["data_quality"] == "good"
     assert proposal["risk_reward_ratio"] == 3.0
-    assert proposal["quantity"] == 10.0
-    assert proposal["position_pct"] == 0.1
+    assert proposal["quantity"] == 9.5
+    assert proposal["position_pct"] == 0.095
     assert worker._proposal_context(snapshot, {"action": "hold", "reason": "no_conservative_setup"}, funded, None)["data_quality"] == "not_applicable"
 
 def test_proposal_context_sizes_against_funded_account():
@@ -97,14 +97,32 @@ def test_proposal_context_sizes_against_funded_account():
 
     worker = object.__new__(PaperWorker)
     worker.broker = PaperBroker()
-    worker.settings = type("Settings", (), {"max_position_pct": 0.1, "risk_per_trade_pct": 0.005, "enable_paper_execution": False})()
+    worker.settings = type("Settings", (), {"max_position_pct": 0.1, "position_size_headroom": 0.95, "risk_per_trade_pct": 0.005, "enable_paper_execution": False})()
     snapshot = type("Snapshot", (), {"last": 84000.0})()
     account = {"equity": 15.45, "cash": 18.86, "available_cash": 6.55}
     proposal = worker._proposal_context(snapshot, {"action": "buy", "reason": "trend_momentum", "stop_loss": 83900.0, "take_profit": 84200.0}, account, 0.0)
     assert proposal["notional"] <= account["available_cash"]
-    assert proposal["position_pct"] <= worker.settings.max_position_pct
+    assert proposal["position_pct"] < worker.settings.max_position_pct
     risk = {"data_quality": "good", "api_healthy": True, "liquidity_ok": True}
     assert worker._ai_precheck_reason(proposal, account, {"data_quality": "good"}, risk) == ""
+
+def test_risk_context_reports_funded_drawdown_not_paper_ledger():
+    from app.paper_worker import PaperWorker
+    from app.risk.state import RiskState
+
+    worker = object.__new__(PaperWorker)
+    worker.broker = PaperBroker()
+    worker.risk_state = RiskState(worker.broker.cash, worker.broker.cash)
+    worker.exchange_portfolio = {"equity": 21.9, "available_cash": 12.0, "positions": {}, "position_count": 0}
+    worker.settings = type("Settings", (), {
+        "max_position_pct": 0.1, "position_size_headroom": 0.95, "risk_per_trade_pct": 0.005,
+        "max_total_exposure_pct": 0.3, "max_slippage_pct": 0.002,
+    })()
+    before = worker._risk_context(21.9, "BTC-USDT", 0.0, 0.0)
+    assert before["drawdown_pct"] > 0.9 and before["daily_loss_pct"] > 0.9
+    worker._rebase_risk_state()
+    after = worker._risk_context(21.9, "BTC-USDT", 0.0, 0.0)
+    assert after["drawdown_pct"] == 0 and after["daily_loss_pct"] == 0
 
 def test_portfolio_context_prefers_read_only_exchange_snapshot():
     from app.paper_worker import PaperWorker

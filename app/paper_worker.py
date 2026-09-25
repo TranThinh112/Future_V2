@@ -62,6 +62,27 @@ class PaperWorker:
         self.exchange_sync_attempts = 0
         self.exchange_sync_step = ""
 
+    def _account_equity(self) -> tuple[float | None, str]:
+        """Funded equity when the read-only exchange sync is live, else the paper ledger."""
+        portfolio = getattr(self, "exchange_portfolio", None)
+        if portfolio:
+            equity = self._finite(portfolio.get("equity"))
+            if equity and equity > 0:
+                return equity, "exchange"
+        return self._finite(self.broker.cash), "paper"
+
+    def _orderbook_budget(self, portfolio: dict) -> float | None:
+        """Sample slippage at the size the funded account could actually take."""
+        equity = self._finite(portfolio.get("equity"))
+        if not equity or equity <= 0:
+            return None
+        return equity * self.settings.max_position_pct * self.settings.position_size_headroom
+
+    def _rebase_risk_state(self) -> None:
+        """Keep drawdown and daily loss anchored to the funded account, never the paper ledger."""
+        equity, source = self._account_equity()
+        self.risk_state.rebase(equity, source)
+
     def should_call_ai(self, symbol: str, decision: dict, now: float) -> tuple[bool, str]:
         if not self.settings.enable_ai_advisory:
             return False, "ai_advisory_disabled"
@@ -80,14 +101,15 @@ class PaperWorker:
         except (TypeError, ValueError):
             return None
 
-    def _orderbook_context(self, response: dict, last: float) -> dict:
+    def _orderbook_context(self, response: dict, last: float, notional_budget: float | None = None) -> dict:
         row = (response.get("data") or [{}])[0]
         bids = row.get("bids") or []
         asks = row.get("asks") or []
         bid_depth = sum(self._finite(level[1]) or 0 for level in bids if len(level) >= 2)
         ask_depth = sum(self._finite(level[1]) or 0 for level in asks if len(level) >= 2)
         total_depth = bid_depth + ask_depth
-        quantity = self.broker.cash * self.settings.max_position_pct / max(last, 0.000001)
+        budget = notional_budget if notional_budget and notional_budget > 0 else self.broker.cash * self.settings.max_position_pct
+        quantity = budget / max(last, 0.000001)
         return {
             "bid_depth_top20": bid_depth,
             "ask_depth_top20": ask_depth,
@@ -245,6 +267,7 @@ class PaperWorker:
                 self.exchange_sync_at = time.time()
                 self.exchange_sync_error = ""
                 self.exchange_sync_step = "synced"
+                self._rebase_risk_state()
                 return self.exchange_portfolio
             except (httpx.HTTPError, KeyError, TypeError, ValueError, OSError) as exc:
                 self.exchange_sync_error = f"{type(exc).__name__}: {exc}"
@@ -403,7 +426,8 @@ class PaperWorker:
         available = self._finite(portfolio.get("available_cash"))
         if available is None:
             available = self._finite(portfolio.get("cash"))
-        capital_cap = equity * self.settings.max_position_pct if equity else None
+        cap_pct = self.settings.max_position_pct * self.settings.position_size_headroom
+        capital_cap = equity * cap_pct if equity else None
         if available is not None:
             capital_cap = available if capital_cap is None else min(capital_cap, available)
         quantity = notional = position_pct = risk_reward = None
@@ -543,7 +567,7 @@ class PaperWorker:
         prices = {symbol: snapshot.last}
         prices.update({item_symbol: position.entry_price for item_symbol, position in self.broker.positions.items()})
         portfolio = self._portfolio_context(prices)
-        orderbook = self._orderbook_context(orderbook_response, snapshot.last)
+        orderbook = self._orderbook_context(orderbook_response, snapshot.last, self._orderbook_budget(portfolio))
         slippage = orderbook.get("estimated_buy_slippage_pct")
         risk = self._risk_context(portfolio["equity"], symbol, spread, slippage)
         news = await self._fetch_news(symbol)
@@ -661,6 +685,7 @@ class PaperWorker:
         persisted = False
         try:
             await self._sync_exchange_portfolio()
+            self._rebase_risk_state()
             result, candle_response, orderbook_response = await asyncio.gather(
                 self.client.ticker(symbol), self.client.candles(symbol), self.client.order_book(symbol), return_exceptions=True
             )
@@ -716,7 +741,7 @@ class PaperWorker:
         self.last_tick_at = now
         self.last_error = ""
         event["audit_persisted"] = persisted
-        self.risk_state.peak_equity=max(self.risk_state.peak_equity,self.broker.cash)
+        self._rebase_risk_state()
         self.state_store.save(self.broker.snapshot())
         log.info("paper_tick", extra=event)
         return event

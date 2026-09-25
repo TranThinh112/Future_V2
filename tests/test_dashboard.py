@@ -210,7 +210,7 @@ def _probe_worker():
     worker.audit = FakeAudit()
     worker.orchestrator = FakeOrchestrator()
     worker.settings = SimpleNamespace(
-        max_position_pct=0.10, risk_per_trade_pct=0.005, max_total_exposure_pct=0.30,
+        max_position_pct=0.10, position_size_headroom=0.95, risk_per_trade_pct=0.005, max_total_exposure_pct=0.30,
         max_slippage_pct=0.002, max_spread_pct=0.001, enable_paper_execution=False,
         openai_model="gpt-5.4-mini", okx_account_sync=False, ai_precheck_enabled=False,
         okx_api_key="", okx_secret_key="", okx_passphrase="",

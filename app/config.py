@@ -31,7 +31,8 @@ class Settings(BaseSettings):
     okx_demo_trading: bool = True; openai_api_key: str = ""; openai_model: str = "gpt-5.4-mini"
     trading_mode: TradingMode = TradingMode.paper
     database_url: str = "sqlite+aiosqlite:///./crypto.db"; redis_url: str = "redis://localhost:6379/0"
-    max_position_pct: float = Field(.10, ge=0, le=1); max_total_exposure_pct: float = Field(.30, ge=0, le=1)
+    max_position_pct: float = Field(.10, ge=0, le=1); position_size_headroom: float = Field(.95, gt=0, le=1)
+    max_total_exposure_pct: float = Field(.30, ge=0, le=1)
     risk_per_trade_pct: float = Field(.005, ge=0, le=1); daily_loss_limit_pct: float = Field(.02, ge=0, le=1)
     max_drawdown_pct: float = Field(.10, ge=0, le=1); max_spread_pct: float = Field(.001, ge=0)
     max_slippage_pct: float = Field(.002, ge=0); enable_live_trading: bool = False
