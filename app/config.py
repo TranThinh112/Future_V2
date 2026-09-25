@@ -32,10 +32,25 @@ class Settings(BaseSettings):
     trading_mode: TradingMode = TradingMode.paper
     database_url: str = "sqlite+aiosqlite:///./crypto.db"; redis_url: str = "redis://localhost:6379/0"
     max_position_pct: float = Field(.10, ge=0, le=1); position_size_headroom: float = Field(.95, gt=0, le=1)
+    target_margin_usdt: float = Field(5.0, gt=0)
+    target_leverage: int = Field(20, ge=1, le=100)
+    strategy_min_stop_pct: float = Field(.006, gt=0, le=1)
+    strategy_risk_reward: float = Field(2.0, gt=0)
+    tp1_pct: float = Field(.004, gt=0, le=1)
+    tp1_close_pct: float = Field(.30, gt=0, le=1)
+    tp2_pct: float = Field(.010, gt=0, le=1)
+    tp2_close_pct: float = Field(.30, gt=0, le=1)
+    tp3_pct: float = Field(.020, gt=0, le=1)
+    tp3_close_pct: float = Field(.40, gt=0, le=1)
     max_total_exposure_pct: float = Field(.30, ge=0, le=1)
     risk_per_trade_pct: float = Field(.005, ge=0, le=1); daily_loss_limit_pct: float = Field(.02, ge=0, le=1)
     max_drawdown_pct: float = Field(.10, ge=0, le=1); max_spread_pct: float = Field(.001, ge=0)
     max_slippage_pct: float = Field(.002, ge=0); enable_live_trading: bool = False
+    live_execution_enabled: bool = False
+    live_execution_confirmation: str = ""
+    live_dry_run: bool = True
+    live_margin_mode: str = "isolated"
+    live_max_leverage: int = Field(20, ge=1, le=100)
     allowed_symbols: tuple[str, ...] = ("BTC-USDT", "ETH-USDT")
     discord_webhook_url: str = ""
     otel_service_name: str = "crypto-agent"
@@ -66,6 +81,14 @@ class Settings(BaseSettings):
             raise ValueError("only BTC-USDT and ETH-USDT spot symbols are supported")
         if self.trading_mode == TradingMode.live and not self.enable_live_trading:
             raise ValueError("live mode requires ENABLE_LIVE_TRADING=true")
+        if self.trading_mode == TradingMode.live and self.okx_read_only:
+            raise ValueError("live mode requires OKX_READ_ONLY=false")
+        if self.trading_mode == TradingMode.live and self.okx_demo_trading:
+            raise ValueError("live mode requires OKX_DEMO_TRADING=false")
+        if self.trading_mode == TradingMode.live and not self.live_execution_enabled:
+            raise ValueError("live mode requires LIVE_EXECUTION_ENABLED=true")
+        if self.trading_mode == TradingMode.live and self.live_execution_confirmation != "I_UNDERSTAND_LIVE_TRADING_RISK":
+            raise ValueError("live mode requires explicit LIVE_EXECUTION_CONFIRMATION")
         if self.trading_mode == TradingMode.live and not (self.okx_api_key and self.okx_secret_key and self.okx_passphrase):
             raise ValueError("live mode requires OKX credentials")
         return self

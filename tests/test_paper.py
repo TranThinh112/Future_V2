@@ -196,7 +196,7 @@ def test_strategy_generates_sell_signal():
     assert sig["action"] == "sell"
     assert sig["reason"] == "trend_momentum_short"
     assert sig["stop_loss"] == 104.0
-    assert sig["take_profit"] == 94.0
+    assert sig["take_profit"] == 92.0
 
 
 def test_proposal_context_sizes_sell_correctly():

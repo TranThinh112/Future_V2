@@ -22,6 +22,8 @@ class OKXClient:
         return {key: (REDACTED if key.lower() in {"ok-access-key","ok-access-passphrase","ok-access-sign","authorization"} else value) for key, value in headers.items()}
     def validate_symbol(self, symbol):
         if symbol not in ("BTC-USDT", "ETH-USDT"): raise ValueError("unsupported_spot_symbol")
+    def validate_swap_symbol(self, symbol):
+        if symbol not in ("BTC-USDT-SWAP", "ETH-USDT-SWAP"): raise ValueError("unsupported_swap_symbol")
     async def request(self, method, path, *, params=None, body=None, private=False, retries=3):
         body_text=json.dumps(body,separators=(",",":")) if body else ""; last=None
         for attempt in range(retries):
@@ -50,6 +52,16 @@ class OKXClient:
         if body.get("tdMode") != "cash": raise ValueError("spot_orders_must_use_cash_mode")
         if self.read_only: raise PermissionError("okx_client_read_only")
         return await self.request("POST","/api/v5/trade/order",body=body,private=True)
+    async def set_swap_leverage(self, symbol, leverage, margin_mode="isolated"):
+        self.validate_swap_symbol(symbol)
+        if self.read_only: raise PermissionError("okx_client_read_only")
+        return await self.request("POST", "/api/v5/account/set-leverage", body={"instId": symbol, "lever": str(leverage), "mgnMode": margin_mode}, private=True)
+    async def create_swap_order(self, body):
+        self.validate_swap_symbol(body.get("instId", ""))
+        if body.get("tdMode") not in ("isolated", "cross"): raise ValueError("swap_order_requires_margin_mode")
+        if body.get("posSide") not in ("long", "short"): raise ValueError("swap_order_requires_position_side")
+        if self.read_only: raise PermissionError("okx_client_read_only")
+        return await self.request("POST", "/api/v5/trade/order", body=body, private=True)
     async def cancel_order(self, symbol, order_id):
         if self.read_only: raise PermissionError("okx_client_read_only")
         return await self.request("POST","/api/v5/trade/cancel-order",body={"instId":symbol,"ordId":order_id},private=True)

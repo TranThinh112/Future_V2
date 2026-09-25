@@ -453,12 +453,16 @@ class PaperWorker:
             "entry_price": entry if executable else None,
             "stop_loss": stop,
             "take_profit": target,
+            "take_profit_ladder": decision.get("take_profit_ladder"),
             "risk_reward_ratio": risk_reward,
             "quantity": quantity,
             "notional": notional,
             "position_pct": position_pct,
             "max_position_pct": self.settings.max_position_pct,
             "risk_per_trade_pct": self.settings.risk_per_trade_pct,
+            "target_margin_usdt": getattr(self.settings, "target_margin_usdt", 5.0),
+            "target_leverage": getattr(self.settings, "target_leverage", 20),
+            "target_notional_usdt": getattr(self.settings, "target_margin_usdt", 5.0) * getattr(self.settings, "target_leverage", 20),
             "slippage_pct": buy_slippage,
             "execution_enabled": self.settings.enable_paper_execution,
             "order_type": "market",
@@ -630,7 +634,19 @@ class PaperWorker:
         features = compute_features(candles) if len(candles) >= 200 else None
         values = features.iloc[-1].to_dict() if features is not None and not features.empty else {}
         spread = (snapshot.ask - snapshot.bid) / snapshot.ask
-        decision = signal(values, spread, self.settings.max_spread_pct)
+        decision = signal(
+                    values,
+                    spread,
+                    self.settings.max_spread_pct,
+                    getattr(self.settings, "strategy_min_stop_pct", 0.006),
+                    getattr(self.settings, "strategy_risk_reward", 2.0),
+                    getattr(self.settings, "tp1_pct", 0.004),
+                    getattr(self.settings, "tp1_close_pct", 0.30),
+                    getattr(self.settings, "tp2_pct", 0.010),
+                    getattr(self.settings, "tp2_close_pct", 0.30),
+                    getattr(self.settings, "tp3_pct", 0.020),
+                    getattr(self.settings, "tp3_close_pct", 0.40),
+                )
         consensus, ai_audit_events, _ = await self._ai_round(
             symbol, snapshot, values, row, orderbook_response, spread, decision, candles
         )
@@ -713,7 +729,19 @@ class PaperWorker:
                 features = compute_features(candles) if len(candles) >= 200 else None
                 latest = features.iloc[-1] if features is not None and not features.empty else None
                 values = latest.to_dict() if latest is not None else {}
-                decision = signal(values, spread, self.settings.max_spread_pct)
+                decision = signal(
+                    values,
+                    spread,
+                    self.settings.max_spread_pct,
+                    getattr(self.settings, "strategy_min_stop_pct", 0.006),
+                    getattr(self.settings, "strategy_risk_reward", 2.0),
+                    getattr(self.settings, "tp1_pct", 0.004),
+                    getattr(self.settings, "tp1_close_pct", 0.30),
+                    getattr(self.settings, "tp2_pct", 0.010),
+                    getattr(self.settings, "tp2_close_pct", 0.30),
+                    getattr(self.settings, "tp3_pct", 0.020),
+                    getattr(self.settings, "tp3_close_pct", 0.40),
+                )
                 event = {"symbol": symbol, "price": snapshot.last, "spread_pct": spread, "candle_count": len(candles), "ema20": float(values["ema20"]) if values.get("ema20") is not None else None, "rsi": float(values["rsi"]) if values.get("rsi") is not None else None, **decision}
                 exit_fill = self.broker.mark(symbol, snapshot.last)
                 if exit_fill:
