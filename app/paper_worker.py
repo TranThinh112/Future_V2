@@ -438,6 +438,13 @@ class PaperWorker:
             position_pct = notional / equity if equity else None
             if target and target > entry:
                 risk_reward = (target - entry) / (entry - stop)
+        elif action == "sell" and entry and stop and stop > entry and capital_cap:
+            risk_amount = (equity or 0.0) * self.settings.risk_per_trade_pct
+            quantity = min(risk_amount / (stop - entry), capital_cap / entry)
+            notional = quantity * entry
+            position_pct = notional / equity if equity else None
+            if target and entry > target:
+                risk_reward = (entry - target) / (stop - entry)
         executable = action in ("buy", "sell")
         return {
             "source": "deterministic_strategy",
@@ -523,7 +530,7 @@ class PaperWorker:
         available_cash = self._finite(portfolio.get("available_cash"))
         if available_cash is None:
             available_cash = self._finite(portfolio.get("cash"))
-        if proposal.get("action") == "buy" and available_cash is not None and notional > max(available_cash, 0):
+        if proposal.get("action") in ("buy", "sell") and available_cash is not None and notional > max(available_cash, 0):
             return "proposal_notional_exceeds_available_cash"
         position_pct = self._finite(proposal.get("position_pct"))
         max_position_pct = self._finite(proposal.get("max_position_pct")) or self.settings.max_position_pct

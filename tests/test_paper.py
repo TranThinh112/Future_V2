@@ -179,3 +179,44 @@ def test_ai_precheck_allows_funded_buy():
     orderbook = {"data_quality": "good"}
     risk = {"data_quality": "good", "api_healthy": True, "liquidity_ok": True}
     assert worker._ai_precheck_reason(proposal, portfolio, orderbook, risk) == ""
+
+
+def test_strategy_generates_sell_signal():
+    from app.strategy import signal
+    features = {
+        "close": 100.0,
+        "ema20": 105.0,
+        "ema50": 110.0,
+        "rsi": 40.0,
+        "macd": -1.5,
+        "macd_signal": -0.5,
+        "atr": 2.0,
+    }
+    sig = signal(features, 0.0001, 0.001)
+    assert sig["action"] == "sell"
+    assert sig["reason"] == "trend_momentum_short"
+    assert sig["stop_loss"] == 104.0
+    assert sig["take_profit"] == 94.0
+
+
+def test_proposal_context_sizes_sell_correctly():
+    from app.paper_worker import PaperWorker
+
+    worker = object.__new__(PaperWorker)
+    worker.broker = PaperBroker()
+    worker.settings = type("Settings", (), {
+        "max_position_pct": 0.1,
+        "position_size_headroom": 0.95,
+        "risk_per_trade_pct": 0.005,
+        "enable_paper_execution": False,
+    })()
+    snapshot = type("Snapshot", (), {"last": 100.0})()
+    funded = {"equity": 1000.0, "cash": 500.0, "available_cash": 500.0}
+    decision = {"action": "sell", "reason": "trend_momentum_short", "stop_loss": 105.0, "take_profit": 90.0}
+    proposal = worker._proposal_context(snapshot, decision, funded, 0.0)
+    assert proposal["action"] == "sell"
+    assert proposal["data_quality"] == "good"
+    assert proposal["risk_reward_ratio"] == 2.0
+    assert proposal["quantity"] == 0.95
+    assert proposal["notional"] == 95.0
+    assert round(proposal["position_pct"], 4) == 0.095
