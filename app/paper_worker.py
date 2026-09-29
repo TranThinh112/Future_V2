@@ -12,6 +12,7 @@ import numpy as np
 
 from app.config import Settings, TradingMode
 from app.execution.paper import PaperBroker
+from app.execution.live import LiveFuturesExecutor
 from app.features.indicators import compute_features
 from app.market_data.okx import OKXClient
 from app.market_data.orderbook import estimated_slippage
@@ -763,6 +764,13 @@ class PaperWorker:
                         symbol, snapshot, values, row, orderbook_response, spread, decision, candles
                     )
                     event["agent_consensus"] = {"action":consensus.action,"score":consensus.score,"approved":consensus.approved,"reason_codes":consensus.reason_codes}
+                    if consensus.approved and consensus.action in ("buy", "sell") and getattr(self.settings, "trading_mode", None) == TradingMode.live:
+                        try:
+                            proposal_data = self._proposal_context(snapshot, decision, self._portfolio_context({}), spread)
+                            live_res = await self.live_executor.submit(proposal_data, consensus.model_dump())
+                            event["live_execution"] = live_res
+                        except Exception as exc:
+                            event["live_execution_error"] = str(exc)
                 else:
                     event["agent_consensus"] = {"action":"hold","score":0,"approved":False,"reason_codes":[ai_reason],"skipped":True}
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
