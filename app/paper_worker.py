@@ -29,7 +29,7 @@ log = logging.getLogger(__name__)
 
 class PaperWorker:
     def __init__(self, settings: Settings, interval_seconds: int = 30):
-        if settings.trading_mode != TradingMode.paper:
+        if settings.trading_mode not in (TradingMode.paper, TradingMode.live):
             raise ValueError("PaperWorker can only run in paper mode")
         self.settings, self.interval, self.running = settings, interval_seconds, False
         self.client = OKXClient(

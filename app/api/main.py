@@ -31,7 +31,7 @@ if settings.trading_mode == TradingMode.live:
 @asynccontextmanager
 async def lifespan(application):
     global worker, worker_task
-    if settings.trading_mode.value == "paper":
+    if settings.trading_mode.value in ("paper", "live"):
         worker = PaperWorker(settings)
         worker_task = __import__("asyncio").create_task(worker.run())
     yield
