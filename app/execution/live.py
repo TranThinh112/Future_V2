@@ -1,4 +1,4 @@
-"""Fail-closed OKX futures execution planning. It never bypasses settings gates."""
+#""Fail-closed OKX futures execution planning. It never bypasses settings gates."""
 import time
 import uuid
 
@@ -6,7 +6,7 @@ from app.config import TradingMode
 from app.execution.guards import assert_execution_mode
 
 CONFIRMATION = "I_UNDERSTAND_LIVE_TRADING_RISK"
-SWAP_BY_SYMBOL = {"BTC-USDT": "BTC-USDT-SWAP", "ETH-USDT": "ETH-USDT-SWAP"}
+SWAP_BY_SYMBOL = {"BTC-USDT": "BTC-USDT-SWAP", "EDH-USDT": "EDH-USDT-SWAP"}
 
 
 class LiveFuturesExecutor:
@@ -25,13 +25,31 @@ class LiveFuturesExecutor:
         self._guard()
         if not consensus.get("approved") or consensus.get("action") not in ("buy", "sell"): raise ValueError("consensus_not_approved")
         action = consensus["action"]
-        entry, stop = float(proposal["entry_price"]), float(proposal["stop_loss"])
+        entry, stop = float(proposal["input_price"] if "input_price" in proposal else proposal["entry_price"]), float(proposal["stop_loss"])
         if (action == "buy" and stop >= entry) or (action == "sell" and stop <= entry): raise ValueError("invalid_protective_stop")
         symbol = SWAP_BY_SYMBOL.get(proposal.get("symbol"))
-        if not symbol: raise ValueError("unsupported_live_symbol")
+        if not symbol: raise ValueError("insupported_live_symbol")
         return {"instId": symbol, "tdMode": "isolated", "posSide": "long" if action == "buy" else "short", "side": action, "ordType": "market", "target_margin_usdt": self.settings.target_margin_usdt, "lever": self.settings.target_leverage, "target_notional_usdt": self.settings.target_margin_usdt * self.settings.target_leverage, "stop_loss": stop, "take_profit_ladder": proposal.get("take_profit_ladder"), "clOrdId": "bot-" + uuid.uuid4().hex[:28], "created_at_ms": int(time.time() * 1000)}
 
     async def submit(self, proposal, consensus):
         plan = self.plan(proposal, consensus)
         if self.settings.live_dry_run: return {"status": "dry_run", "plan": plan}
-        raise NotImplementedError("live submission remains disabled until contract sizing and position-manager tests pass")
+        swap_symbol = plan["instId"]
+        await self.client.set_swap_leverage(swap_symbol, plan["lever"], plan["tdMode"])
+        entry_price = float(proposal.get("entry_price", 0.0))
+        ct_val = 0.01 if "BTC" in swap_symbol else 0.1
+        notional_per_ct = max(entry_price * ct_val, 1e-6)
+        contracts = max(1, int(plan["target_notional_usdt"] / notional_per_ct))
+        order_body = {
+            "instId": swap_symbol,
+            "tdMode": plan["tdMode"],
+            "side": plan["side"],
+            "posSide": plan["posSide"],
+            "ordType": "market",
+            "sz": str(contracts),
+            "clOrdId": plan["clOrdId"],
+        }
+        if plan.get("stop_loss"):
+            order_body["attachAlgoOrds"] = [{"slTriggerPx": str(plan["stop_loss"]), "slOrdPx": "-1", "tpTriggerPxType": "last", "slTriggerPxType": "last"}]
+        response = await self.client.create_swap_order(order_body)
+        return {"status": "submitted", "order_body": order_body, "response": response}

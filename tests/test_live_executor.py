@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-
+import asyncio
 import pytest
 
 from app.config import TradingMode
@@ -35,7 +35,7 @@ def proposal(action="buy"):
 
 def test_live_executor_returns_dry_run_plan_without_order_submission():
     executor = LiveFuturesExecutor(object(), settings())
-    result = __import__("asyncio").run(executor.submit(proposal(), {"approved": True, "action": "buy"}))
+    result = asyncio.run(executor.submit(proposal(), {"approved": True, "action": "buy"}))
     assert result["status"] == "dry_run"
     assert result["plan"]["instId"] == "BTC-USDT-SWAP"
     assert result["plan"]["target_notional_usdt"] == 100.0
@@ -54,3 +54,23 @@ def test_live_executor_rejects_unapproved_or_unsafe_orders():
         executor.plan(proposal(), {"approved": False, "action": "buy"})
     with pytest.raises(ValueError, match="invalid_protective_stop"):
         executor.plan({**proposal(), "stop_loss": 85000.0}, {"approved": True, "action": "buy"})
+
+
+def test_live_executor_submits_swap_order_when_not_dry_run():
+    class MockOKXClient:
+        def __init__(self):
+            self.leverage_set = None
+            self.order_created = None
+        async def set_swap_leverage(self, symbol, leverage, margin_mode):
+            self.leverage_set = (symbol, leverage, margin_mode)
+        async def create_swap_order(self, body):
+            self.order_created = body
+            return {"code": "0", "data": [{"ordId": "12345"}]}
+
+    client = MockOKXClient()
+    executor = LiveFuturesExecutor(client, settings(live_dry_run=False))
+    result = asyncio.run(executor.submit(proposal(), {"approved": True, "action": "buy"}))
+    assert result["status"] == "submitted"
+    assert client.leverage_set == ("BTC-USDT-SWAP", 20, "isolated")
+    assert client.order_created["instId"] == "BTC-USDT-SWAP"
+    assert client.order_created["clOrdId"].startswith("bot-")
