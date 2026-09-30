@@ -444,7 +444,7 @@ class PaperWorker:
             else:
                 quantity = min(risk_amount / (entry - stop), capital_cap / entry)
                 notional = quantity * entry
-            position_pct = notional / equity if equity else None
+            position_pct = (getattr(self.settings, "target_margin_usdt", 5.0) / equity) if (is_small_account and equity) else (notional / equity if equity else None)
             if target and target > entry:
                 risk_reward = (target - entry) / (entry - stop)
         elif action == "sell" and entry and stop and stop > entry and capital_cap:
@@ -456,7 +456,7 @@ class PaperWorker:
             else:
                 quantity = min(risk_amount / (stop - entry), capital_cap / entry)
                 notional = quantity * entry
-            position_pct = notional / equity if equity else None
+            position_pct = (getattr(self.settings, "target_margin_usdt", 5.0) / equity) if (is_small_account and equity) else (notional / equity if equity else None)
             if target and entry > target:
                 risk_reward = (entry - target) / (stop - entry)
         executable = action in ("buy", "sell")
