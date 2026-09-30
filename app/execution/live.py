@@ -6,7 +6,7 @@ from app.config import TradingMode
 from app.execution.guards import assert_execution_mode
 
 CONFIRMATION = "I_UNDERSTAND_LIVE_TRADING_RISK"
-SWAP_BY_SYMBOL = {"BTC-USDT": "BTC-USDT-SWAP", "EDH-USDT": "EDH-USDT-SWAP"}
+SWAP_BY_SYMBOL = {"BTC-USDT": "BTC-USDT-SWAP", "ETH-USDT": "ETH-USDT-SWAP"}
 
 
 class LiveFuturesExecutor:
@@ -28,7 +28,7 @@ class LiveFuturesExecutor:
         entry, stop = float(proposal["input_price"] if "input_price" in proposal else proposal["entry_price"]), float(proposal["stop_loss"])
         if (action == "buy" and stop >= entry) or (action == "sell" and stop <= entry): raise ValueError("invalid_protective_stop")
         symbol = SWAP_BY_SYMBOL.get(proposal.get("symbol"))
-        if not symbol: raise ValueError("insupported_live_symbol")
+        if not symbol: raise ValueError("unsupported_live_symbol")
         return {"instId": symbol, "tdMode": "isolated", "posSide": "long" if action == "buy" else "short", "side": action, "ordType": "market", "target_margin_usdt": self.settings.target_margin_usdt, "lever": self.settings.target_leverage, "target_notional_usdt": self.settings.target_margin_usdt * self.settings.target_leverage, "stop_loss": stop, "take_profit_ladder": proposal.get("take_profit_ladder"), "clOrdId": "bot-" + uuid.uuid4().hex[:28], "created_at_ms": int(time.time() * 1000)}
 
     async def submit(self, proposal, consensus):
@@ -49,7 +49,21 @@ class LiveFuturesExecutor:
             "sz": str(contracts),
             "clOrdId": plan["clOrdId"],
         }
+        algo = {}
         if plan.get("stop_loss"):
-            order_body["attachAlgoOrds"] = [{"slTriggerPx": str(plan["stop_loss"]), "slOrdPx": "-1", "tpTriggerPxType": "last", "slTriggerPxType": "last"}]
+            algo["slTriggerPx"] = str(plan["stop_loss"])
+            algo["slOrdPx"] = "-1"
+            algo["slTriggerPxType"] = "last"
+        tp_price = None
+        if plan.get("take_profit_ladder") and isinstance(plan.get("take_profit_ladder"), dict) and plan["take_profit_ladder"].get("tp1"):
+            tp_price = plan["take_profit_ladder"]["tp1"]
+        elif proposal.get("take_profit"):
+            tp_price = proposal["take_profit"]
+        if tp_price:
+            algo["tpTriggerPx"] = str(tp_price)
+            algo["tpOrdPx"] = "-1"
+            algo["tpTriggerPxType"] = "last"
+        if algo:
+            order_body["attachAlgoOrds"] = [algo]
         response = await self.client.create_swap_order(order_body)
         return {"status": "submitted", "order_body": order_body, "response": response}
