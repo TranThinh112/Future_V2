@@ -166,7 +166,7 @@ def test_ai_precheck_blocks_unfunded_buy_without_agent_calls():
     portfolio = {"available_cash": 1.0, "cash": 1.0}
     orderbook = {"data_quality": "good"}
     risk = {"data_quality": "good", "api_healthy": True, "liquidity_ok": True}
-    assert worker._ai_precheck_reason(proposal, portfolio, orderbook, risk) == "proposal_notional_exceeds_available_cash"
+    assert worker._ai_precheck_reason(proposal, portfolio, orderbook, risk) == "proposal_required_margin_exceeds_available_cash"
 
 
 def test_ai_precheck_allows_funded_buy():

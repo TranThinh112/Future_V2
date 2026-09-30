@@ -548,8 +548,9 @@ class PaperWorker:
         available_cash = self._finite(portfolio.get("available_cash"))
         if available_cash is None:
             available_cash = self._finite(portfolio.get("cash"))
-        if proposal.get("action") in ("buy", "sell") and available_cash is not None and notional > max(available_cash, 0):
-            return "proposal_notional_exceeds_available_cash"
+        required_margin = self._finite(proposal.get("target_margin_usdt")) or 5.0
+        if proposal.get("action") in ("buy", "sell") and available_cash is not None and required_margin > max(available_cash, 0):
+            return "proposal_required_margin_exceeds_available_cash"
         position_pct = self._finite(proposal.get("position_pct"))
         max_position_pct = self._finite(proposal.get("max_position_pct")) or self.settings.max_position_pct
         if position_pct is not None and max_position_pct is not None and position_pct > max_position_pct:
