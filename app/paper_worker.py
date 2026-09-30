@@ -277,9 +277,10 @@ class PaperWorker:
                 return self.exchange_portfolio
 
     def _risk_context(self, equity: float, symbol: str, spread: float, slippage: float | None) -> dict:
+        effective_max_pos_pct = 1.0 if (getattr(self.settings, "trading_mode", None) == TradingMode.live and equity and equity < 50.0) else self.settings.max_position_pct
         return {
             "risk_per_trade_pct": self.settings.risk_per_trade_pct,
-            "max_position_pct": self.settings.max_position_pct,
+            "max_position_pct": effective_max_pos_pct,
             "max_total_exposure_pct": self.settings.max_total_exposure_pct,
             "daily_loss_pct": self.risk_state.daily_loss(equity),
             "drawdown_pct": self.risk_state.drawdown(equity),
@@ -427,22 +428,34 @@ class PaperWorker:
         available = self._finite(portfolio.get("available_cash"))
         if available is None:
             available = self._finite(portfolio.get("cash"))
-        cap_pct = self.settings.max_position_pct * self.settings.position_size_headroom
+        is_small_account = bool(getattr(self.settings, "trading_mode", None) == TradingMode.live and equity and equity < 50.0)
+        effective_max_pos_pct = 1.0 if is_small_account else self.settings.max_position_pct
+        cap_pct = effective_max_pos_pct * self.settings.position_size_headroom
         capital_cap = equity * cap_pct if equity else None
         if available is not None:
             capital_cap = available if capital_cap is None else min(capital_cap, available)
         quantity = notional = position_pct = risk_reward = None
         if action == "buy" and entry and stop and entry > stop and capital_cap:
             risk_amount = (equity or 0.0) * self.settings.risk_per_trade_pct
-            quantity = min(risk_amount / (entry - stop), capital_cap / entry)
-            notional = quantity * entry
+            if is_small_account and capital_cap and capital_cap >= getattr(self.settings, "target_margin_usdt", 5.0):
+                target_notional = getattr(self.settings, "target_margin_usdt", 5.0) * getattr(self.settings, "target_leverage", 20)
+                quantity = target_notional / entry
+                notional = target_notional
+            else:
+                quantity = min(risk_amount / (entry - stop), capital_cap / entry)
+                notional = quantity * entry
             position_pct = notional / equity if equity else None
             if target and target > entry:
                 risk_reward = (target - entry) / (entry - stop)
         elif action == "sell" and entry and stop and stop > entry and capital_cap:
             risk_amount = (equity or 0.0) * self.settings.risk_per_trade_pct
-            quantity = min(risk_amount / (stop - entry), capital_cap / entry)
-            notional = quantity * entry
+            if is_small_account and capital_cap and capital_cap >= getattr(self.settings, "target_margin_usdt", 5.0):
+                target_notional = getattr(self.settings, "target_margin_usdt", 5.0) * getattr(self.settings, "target_leverage", 20)
+                quantity = target_notional / entry
+                notional = target_notional
+            else:
+                quantity = min(risk_amount / (stop - entry), capital_cap / entry)
+                notional = quantity * entry
             position_pct = notional / equity if equity else None
             if target and entry > target:
                 risk_reward = (entry - target) / (stop - entry)
@@ -459,7 +472,7 @@ class PaperWorker:
             "quantity": quantity,
             "notional": notional,
             "position_pct": position_pct,
-            "max_position_pct": self.settings.max_position_pct,
+            "max_position_pct": effective_max_pos_pct,
             "risk_per_trade_pct": self.settings.risk_per_trade_pct,
             "target_margin_usdt": getattr(self.settings, "target_margin_usdt", 5.0),
             "target_leverage": getattr(self.settings, "target_leverage", 20),
