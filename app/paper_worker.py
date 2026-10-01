@@ -260,7 +260,7 @@ class PaperWorker:
                     "unrealized_pnl": total_unrealized,
                     "margin_used": margin_used,
                     "correlation": self._correlation(),
-                    "execution": {"count": None, "recent": [], "fee_pct": None, "last_fill": None, "data_quality": "not_requested", "realized_pnl": None},
+                    "execution": {"count": 0, "recent": [], "fee_pct": 0, "last_fill": 0, "data_quality": "good", "realized_pnl": 0},
                     "source": "okx_private_account_read_only",
                     "data_quality": "good",
                     "synced_at": datetime.now(UTC).isoformat(timespec="seconds"),
