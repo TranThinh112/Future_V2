@@ -44,6 +44,7 @@ class PaperWorker:
         self.broker = PaperBroker.restore(self.state_store.load({}))
         self.risk_state = RiskState(self.broker.cash, self.broker.cash)
         self.orchestrator = Orchestrator(settings)
+        self.live_executor = LiveFuturesExecutor(self.client, settings)
         self.news = NewsService(
             settings.news_provider_url,
             settings.news_api_key,
@@ -780,7 +781,7 @@ class PaperWorker:
                     event["agent_consensus"] = {"action":consensus.action,"score":consensus.score,"approved":consensus.approved,"reason_codes":consensus.reason_codes}
                     if consensus.approved and consensus.action in ("buy", "sell") and getattr(self.settings, "trading_mode", None) == TradingMode.live:
                         try:
-                            proposal_data = self._proposal_context(snapshot, decision, self._portfolio_context({}), spread)
+                            proposal_data = self._proposal_context(snapshot, decision, self._portfolio_context({symbol: snapshot.last}), spread)
                             live_res = await self.live_executor.submit(proposal_data, consensus.model_dump())
                             event["live_execution"] = live_res
                         except Exception as exc:
