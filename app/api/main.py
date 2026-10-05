@@ -303,7 +303,7 @@ async def dashboard_data(limit: int = 300):
     }
 
 @app.post("/api/ai/probe")
-async def ai_probe(symbol: str = "BTC-USDT"):
+async def ai_probe(symbol: str = "BTC-USDT", force: bool = False):
     """Operator-triggered single AI round on live data. Spends real OpenAI tokens and audits the result."""
     requests.inc()
     if not worker:
@@ -312,4 +312,4 @@ async def ai_probe(symbol: str = "BTC-USDT"):
         return JSONResponse({"available": False, "reason": "unsupported_symbol", "allowed": list(settings.allowed_symbols)}, status_code=400)
     if not settings.openai_api_key:
         return JSONResponse({"available": False, "reason": "openai_key_missing"}, status_code=400)
-    return {"available": True, **await worker.ai_probe(symbol)}
+    return {"available": True, **await worker.ai_probe(symbol, force=force)}

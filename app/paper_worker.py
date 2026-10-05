@@ -634,7 +634,7 @@ class PaperWorker:
         await self.audit.append("consensus", consensus_event)
         return consensus, ai_audit_events, agent_snapshot
 
-    async def ai_probe(self, symbol: str) -> dict:
+    async def ai_probe(self, symbol: str, force: bool = False) -> dict:
         """Operator-triggered single AI round on live data; bypasses the advisory cooldown."""
         await self._sync_exchange_portfolio(force=True)
         result, candle_response, orderbook_response = await asyncio.gather(
