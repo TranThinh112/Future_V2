@@ -91,3 +91,47 @@ def test_agent_invalid_json_is_classified(monkeypatch):
     monkeypatch.setattr("app.agents.openai_adapter.httpx.AsyncClient", FakeClient)
     decision = asyncio.run(OpenAIAgent("VESKA", "key", retries=0).decide({"symbol": "ETH-USDT"}))
     assert decision.reason_codes == ["openai_invalid_json"]
+
+
+def test_agent_deepseek_format(monkeypatch):
+    calls = {}
+    output = {
+        'agent_name': 'RUNE',
+        'symbol': 'BTC-USDT',
+        'action': 'buy',
+        'confidence': 0.8,
+        'time_horizon': '15m',
+        'entry_price': 85000.0,
+        'stop_loss_price': 84000.0,
+        'take_profit_price': 87000.0,
+        'suggested_position_pct': 0.05,
+        'reason_codes': ['bullish'],
+        'invalidators': [],
+        'data_quality': 'good',
+        'veto': False,
+    }
+
+    class FakeResponse:
+        def raise_for_status(self): return None
+        def json(self): return {
+            'choices': [{'message': {'content': json.dumps(output)}}],
+            'usage': {'prompt_tokens': 100, 'completion_tokens': 50, 'total_tokens': 150}
+        }
+
+    class FakeClient:
+        def __init__(self, timeout): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, exc_type, exc, tb): return None
+        async def post(self, url, headers, json):
+            calls['url'] = url
+            calls['json'] = json
+            return FakeResponse()
+
+    monkeypatch.setattr('app.agents.openai_adapter.httpx.AsyncClient', FakeClient)
+    agent = OpenAIAgent('RUNE', 'key', model='deepseek-chat', base_url='https://api.deepseek.com', retries=0)
+    decision = asyncio.run(agent.decide({'symbol': 'BTC-USDT'}))
+
+    assert calls['url'] == 'https://api.deepseek.com/chat/completions'
+    assert 'messages' in calls['json']
+    assert decision.action == 'buy'
+    assert agent.last_usage == {'input_tokens': 100, 'output_tokens': 50, 'total_tokens': 150}
