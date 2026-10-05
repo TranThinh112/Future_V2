@@ -420,7 +420,7 @@ class PaperWorker:
             "data_quality": "good",
         }
 
-    def _proposal_context(self, snapshot, decision: dict, portfolio: dict, buy_slippage: float | None) -> dict:
+    def _proposal_context(self, snapshot, decision: dict, portfolio: dict, buy_slippage: float | None, symbol: str | None = None) -> dict:
         """Size the proposal against the funded account, not the paper ledger."""
         entry = self._finite(snapshot.last)
         stop, target = self._finite(decision.get("stop_loss")), self._finite(decision.get("take_profit"))
@@ -463,6 +463,7 @@ class PaperWorker:
         executable = action in ("buy", "sell")
         return {
             "source": "deterministic_strategy",
+            "symbol": symbol or getattr(snapshot, "symbol", None),
             "action": action,
             "reason": decision.get("reason"),
             "entry_price": entry if executable else None,
@@ -598,7 +599,7 @@ class PaperWorker:
         slippage = orderbook.get("estimated_buy_slippage_pct")
         risk = self._risk_context(portfolio["equity"], symbol, spread, slippage)
         news = await self._fetch_news(symbol)
-        proposal = self._proposal_context(snapshot, decision, portfolio, slippage)
+        proposal = self._proposal_context(snapshot, decision, portfolio, slippage, symbol=symbol)
         agent_snapshot = self._agent_snapshot(
             symbol, snapshot, values, row, orderbook, spread, portfolio, risk, news, proposal, candles
         )
@@ -781,7 +782,7 @@ class PaperWorker:
                     event["agent_consensus"] = {"action":consensus.action,"score":consensus.score,"approved":consensus.approved,"reason_codes":consensus.reason_codes}
                     if consensus.approved and consensus.action in ("buy", "sell") and getattr(self.settings, "trading_mode", None) == TradingMode.live:
                         try:
-                            proposal_data = self._proposal_context(snapshot, decision, self._portfolio_context({symbol: snapshot.last}), spread)
+                            proposal_data = self._proposal_context(snapshot, decision, self._portfolio_context({symbol: snapshot.last}), spread, symbol=symbol)
                             live_res = await self.live_executor.submit(proposal_data, consensus.model_dump())
                             event["live_execution"] = live_res
                         except Exception as exc:
