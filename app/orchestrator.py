@@ -9,6 +9,7 @@ class Orchestrator:
             settings.openai_model,
             settings.ai_input_cost_per_million,
             settings.ai_output_cost_per_million,
+            base_url=getattr(settings, "openai_base_url", "https://api.openai.com/v1"),
         )
         self.early_stop = settings.ai_early_stop_enabled
         self.stop_on_degraded = settings.ai_early_stop_on_degraded

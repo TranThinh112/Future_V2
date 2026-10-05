@@ -28,7 +28,7 @@ class TradingMode(StrEnum):
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     okx_api_key: str = ""; okx_secret_key: str = ""; okx_passphrase: str = ""
-    okx_demo_trading: bool = True; openai_api_key: str = ""; openai_model: str = "gpt-5.4-mini"
+    okx_demo_trading: bool = True; openai_api_key: str = ""; openai_model: str = "gpt-5.4-mini"; openai_base_url: str = "https://api.openai.com/v1"
     trading_mode: TradingMode = TradingMode.paper
     database_url: str = "sqlite+aiosqlite:///./crypto.db"; redis_url: str = "redis://localhost:6379/0"
     max_position_pct: float = Field(.10, ge=0, le=1); position_size_headroom: float = Field(.95, gt=0, le=1)

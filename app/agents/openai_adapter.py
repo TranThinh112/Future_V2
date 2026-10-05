@@ -27,12 +27,17 @@ def sanitize_snapshot(value):
     return value
 
 def _response_text(data):
-    if data.get("output_text"):
-        return data["output_text"]
-    for item in data.get("output", []):
-        for content in item.get("content", []):
-            if content.get("type") in (None, "output_text") and content.get("text"):
-                return content["text"]
+    if isinstance(data, dict):
+        if "choices" in data and data["choices"]:
+            msg = data["choices"][0].get("message", {})
+            if isinstance(msg, dict) and msg.get("content"):
+                return msg["content"]
+        if data.get("output_text"):
+            return data["output_text"]
+        for item in data.get("output", []):
+            for content in item.get("content", []):
+                if content.get("type") in (None, "output_text") and content.get("text"):
+                    return content["text"]
     return ""
 
 def _number(value, default=0.0):
@@ -95,9 +100,9 @@ def _normalize_decision(raw_text, agent_name, snapshot):
     return AgentDecision.model_validate(payload)
 
 class OpenAIAgent:
-    def __init__(self, name, api_key, model="gpt-5.4-mini", timeout=20, retries=2,
+    def __init__(self, name, api_key, model="gpt-5.4-mini", base_url="https://api.openai.com/v1", timeout=20, retries=2,
                  input_cost_per_million=0.75, output_cost_per_million=4.50):
-        self.name=name; self.key=api_key; self.model=model; self.timeout=timeout; self.retries=retries
+        self.name=name; self.key=api_key; self.model=model; self.base_url=(base_url or "https://api.openai.com/v1").rstrip("/"); self.timeout=timeout; self.retries=retries
         self.input_cost_per_million = input_cost_per_million
         self.output_cost_per_million = output_cost_per_million
         self.last_usage = {}
@@ -130,13 +135,41 @@ class OpenAIAgent:
         self.last_response_preview = ""
         if not self.key: return hold(self.name,snapshot.get("symbol",""),"openai_key_missing")
         safe_snapshot = sanitize_snapshot(snapshot)
-        payload={"model":self.model,"input":[{"role":"system","content":PROMPTS[self.name]+SYSTEM_SUFFIX},{"role":"user","content":json.dumps(safe_snapshot,separators=(",",":"))}],"text":{"format":{"type":"json_object"}},"store":False}
+        system_prompt = PROMPTS[self.name] + SYSTEM_SUFFIX
+        user_content = json.dumps(safe_snapshot, separators=(",", ":"))
+        
+        is_chat_completions = ("deepseek" in self.base_url.lower() or "deepseek" in self.model.lower() or "chat/completions" in self.base_url.lower() or not self.base_url.endswith("openai.com/v1"))
+        
+        if is_chat_completions:
+            url = f"{self.base_url}/chat/completions" if not self.base_url.endswith("/chat/completions") else self.base_url
+            payload = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content}
+                ],
+                "response_format": {"type": "json_object"}
+            }
+        else:
+            url = f"{self.base_url}/responses" if not self.base_url.endswith("/responses") else self.base_url
+            payload = {
+                "model": self.model,
+                "input": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content}
+                ],
+                "text": {"format": {"type": "json_object"}},
+                "store": False
+            }
+
         last_error = None
         for attempt in range(self.retries + 1):
             self.last_attempts = attempt + 1
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as c:
-                    r=await c.post("https://api.openai.com/v1/responses",headers={"Authorization":f"Bearer {self.key}"},json=payload); r.raise_for_status(); data=r.json()
+                    r=await c.post(url, headers={"Authorization":f"Bearer {self.key}"}, json=payload)
+                    r.raise_for_status()
+                    data=r.json()
                 usage = data.get("usage", {})
                 self._record_usage(usage)
                 if usage:
