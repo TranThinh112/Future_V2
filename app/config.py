@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     otel_service_name: str = "crypto-agent"
     otel_exporter_otlp_endpoint: str = ""
     enable_ai_advisory: bool = False
-    ai_advisory_cooldown_seconds: int = Field(900, ge=0)
+    ai_advisory_cooldown_seconds: int = Field(1800, ge=0)
     ai_advisory_on_hold: bool = False
     ai_precheck_enabled: bool = True
     ai_early_stop_enabled: bool = True
