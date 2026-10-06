@@ -77,14 +77,14 @@ function renderPortfolio(p){
   $("portfolio").innerHTML=head+"<div class=\"muted mono\">synced "+esc(p.synced_at||"-")+" · "+esc(p.source||"-")+"</div>"+rows;
 }
 function renderLastRound(r, prices){
-  if(!r){ last-round.innerHTML="<div class=\"empty\">No AI round recorded.</div>"; return; }
+  if(!r){ $("last-round").innerHTML="<div class=\"empty\">No AI round recorded.</div>"; return; }
   const c=r.consensus||{}, u=r.usage||{}, det=r.deterministic||{}, agents=r.agents||[];
   const buys=agents.filter(a=>a.action==="buy").length;
   const sells=agents.filter(a=>a.action==="sell").length;
   const holds=agents.filter(a=>a.action==="hold").length;
   const veto=agents.filter(a=>a.veto).length;
   const vetoAgents=agents.filter(a=>a.veto).map(a=>a.agent);
-  round-id.textContent = (r.round_id||"-") + " · " + (r.symbol||c.symbol||"-");
+  $("round-id").textContent = (r.round_id||"-") + " · " + (r.symbol||c.symbol||"-");
   const hero="<div class=\"hero\"><div class=\"verdict "+esc(c.action||"hold")+"\"><div class=\"action\">"+esc(c.action||"hold")+"</div><div>approved <b>"+(c.approved?"YES":"NO")+"</b></div><div class=\"muted\">score <b>"+n(c.score,3)+"</b> / 0.680</div></div>"+
     "<div><div class=\"facts\">"+
     "<div class=\"fact\"><b>Cost</b><span>"+(r.usage_recorded?usd(u.estimated_cost_usd):"-")+"</span></div>"+
@@ -105,14 +105,14 @@ function renderLastRound(r, prices){
   } else {
     warn = "<div class=\"warn\"><b>NOT APPROVED.</b> Votes: "+buys+" buy, "+sells+" sell, "+holds+" hold, "+veto+" veto. Need 8/8 consensus & score ≥ 0.680 to enter.</div>";
   }
-  last-round.innerHTML=hero+warn;
+  $("last-round").innerHTML=hero+warn;
 }
 function renderAgentVotes(r, prices){
-  const agents=(r&&r.agents)||[]; if(!agents.length){ agent-votes.innerHTML="<div class=\"empty\">No agent rows.</div>"; return; }
+  const agents=(r&&r.agents)||[]; if(!agents.length){ $("agent-votes").innerHTML="<div class=\"empty\">No agent rows.</div>"; return; }
   const c=(r&&r.consensus)||{};
   const buys=agents.filter(a=>a.action==="buy").length, sells=agents.filter(a=>a.action==="sell").length, holds=agents.filter(a=>a.action==="hold").length, veto=agents.filter(a=>a.veto).length;
-  vote-summary.textContent = buys+" buy · "+sells+" sell · "+holds+" hold · "+veto+" veto · Score: "+n(c.score,3)+" / 0.680 ("+(c.approved?"APPROVED":"NOT APPROVED")+")";
-  agent-votes.innerHTML="<div class=\"agent-grid\">"+agents.map(a=>{
+  $("vote-summary").textContent = buys+" buy · "+sells+" sell · "+holds+" hold · "+veto+" veto · Score: "+n(c.score,3)+" / 0.680 ("+(c.approved?"APPROVED":"NOT APPROVED")+")";
+  $("agent-votes").innerHTML="<div class=\"agent-grid\">"+agents.map(a=>{
     const now=prices[a.symbol]?prices[a.symbol].price:null, delta=(now&&a.entry_price)?(now/a.entry_price-1)*100:null;
     return "<div class=\"agent "+(a.veto?"veto\">":"\">")+"<div class=\"name\"><span>"+esc(a.agent)+"</span>"+tag(a.action)+"</div><div class=\"meta\">conf "+n(a.confidence,2)+" · "+esc(a.data_quality||"-")+(a.veto?" · veto":"")+"<br>entry "+n(a.entry_price)+" · SL "+n(a.stop_loss_price)+" · TP "+n(a.take_profit_price)+"<br>now Δ "+(delta===null?"-":delta.toFixed(3)+"%")+"</div><details><summary>reasons</summary><pre>"+esc((a.reason_codes||[]).join("\n")||"-")+"</pre></details></div>";
   }).join("")+"</div>";
@@ -124,7 +124,7 @@ function renderAgentCost(agents){
 }
 function renderConsensus(rows){
   rows=rows||[];
-  consensus.innerHTML=rows.length?"<div class=\"table-wrap\"><table><thead><tr><th>When</th><th>Symbol</th><th>Action</th><th class=\"num\">Score</th><th>Approved</th><th>Why Not Entered / Reasons</th></tr></thead><tbody>"+rows.slice(0,25).map(r=>{
+  $("consensus").innerHTML=rows.length?"<div class=\"table-wrap\"><table><thead><tr><th>When</th><th>Symbol</th><th>Action</th><th class=\"num\">Score</th><th>Approved</th><th>Why Not Entered / Reasons</th></tr></thead><tbody>"+rows.slice(0,25).map(r=>{
     const votes=r.votes||[];
     const vetoes=votes.filter(v=>v.veto).map(v=>v.agent_name);
     const buys=votes.filter(v=>v.action==="buy").length;
