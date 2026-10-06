@@ -92,7 +92,7 @@ function renderLastRound(r, prices){
     "<div class=\"fact\"><b>Votes</b><span>"+buys+" buy · "+sells+" sell · "+holds+" hold · "+veto+" veto</span></div>"+
     "<div class=\"fact\"><b>Last call</b><span>"+when(c.ts)+"</span></div>"+
     "<div class=\"fact\"><b>Score (Target ≥ 0.680)</b><span>"+n(c.score,3)+" / 0.680</span></div>"+
-    "<div class=\"fact\"><b>Reasons</b><span>"+esc((c.reason_codes||[]).join(", ")||"-")+"</span></div>"+
+    "<div class=\"fact\"><b>Reasons</b><span>"+esc((c.reason_codes&&c.reason_codes.length)?c.reason_codes.join(", "):(c.approved?"Approved":(veto>0?"Vetoed by "+vetoAgents.join(", "):((buys===8||sells===8)?"Score "+n(c.score,3)+" < 0.680":"Score "+n(c.score,3)+" / No consensus"))))+"</span></div>"+
     "</div></div></div>";
   let warn = "";
   if(c.approved){
