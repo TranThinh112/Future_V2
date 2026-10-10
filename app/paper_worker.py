@@ -539,6 +539,10 @@ class PaperWorker:
             return ""
         if proposal.get("action") == "hold":
             return str(proposal.get("reason") or "deterministic_hold")
+        symbol = proposal.get("symbol")
+        positions = portfolio.get("positions", {})
+        if symbol and any(symbol == p or p.startswith(symbol) or symbol.startswith(p) for p in positions):
+            return "position_already_exists"
         if proposal.get("data_quality") != "good":
             return f"proposal_data_quality_{proposal.get('data_quality')}"
         if orderbook.get("data_quality") != "good":

@@ -48,14 +48,16 @@ class LiveFuturesExecutor:
         entry_price = float(proposal.get("entry_price", 0.0))
         ct_val = 0.01 if "BTC" in swap_symbol else 0.1
         notional_per_ct = max(entry_price * ct_val, 1e-6)
-        contracts = max(1, int(plan["target_notional_usdt"] / notional_per_ct))
+        raw_contracts = plan["target_notional_usdt"] / notional_per_ct
+        contracts = max(0.01, round(raw_contracts, 2))
+        sz_str = f"{contracts:.2f}".rstrip("0").rstrip(".")
         order_body = {
             "instId": swap_symbol,
             "tdMode": plan["tdMode"],
             "side": plan["side"],
             "posSide": plan["posSide"],
             "ordType": "market",
-            "sz": str(contracts),
+            "sz": sz_str,
             "clOrdId": plan["clOrdId"],
         }
         algo = {}
@@ -64,11 +66,9 @@ class LiveFuturesExecutor:
             algo["slTriggerPx"] = str(round(float(plan["stop_loss"]), decimals))
             algo["slOrdPx"] = "-1"
             algo["slTriggerPxType"] = "last"
-        tp_price = None
-        if plan.get("take_profit_ladder") and isinstance(plan.get("take_profit_ladder"), dict) and plan["take_profit_ladder"].get("tp1"):
-            tp_price = plan["take_profit_ladder"]["tp1"]
-        elif proposal.get("take_profit"):
-            tp_price = proposal["take_profit"]
+        tp_price = proposal.get("take_profit")
+        if not tp_price and plan.get("take_profit_ladder") and isinstance(plan.get("take_profit_ladder"), dict):
+            tp_price = plan["take_profit_ladder"].get("tp3") or plan["take_profit_ladder"].get("tp1")
         if tp_price:
             algo["tpTriggerPx"] = str(round(float(tp_price), decimals))
             algo["tpOrdPx"] = "-1"
