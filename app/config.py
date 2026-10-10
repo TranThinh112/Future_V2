@@ -1,6 +1,23 @@
 from enum import StrEnum
 
-from pydantic import Field, model_validator
+from pydantic import Field
+try:
+    from pydantic import model_validator
+except ImportError:
+    from pydantic import root_validator
+    def model_validator(mode="after"):
+        def decorator(f):
+            def wrapper(cls, values):
+                class Mock:
+                    pass
+                m = Mock()
+                if isinstance(values, dict):
+                    for k, v in values.items():
+                        setattr(m, k, v)
+                f(m)
+                return values
+            return root_validator(allow_reuse=True)(wrapper)
+        return decorator
 
 try:
     from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -12,7 +29,8 @@ except ImportError:  # Keep tests/imports usable before optional settings depend
     class BaseSettings(BaseModel):  # type: ignore[no-redef]
         def __init__(self, **values):
             file_values = dotenv_values(".env")
-            for name in self.__class__.model_fields:
+            fields = getattr(self.__class__, "model_fields", getattr(self.__class__, "__fields__", {}))
+            for name in fields:
                 env = name.upper()
                 if name not in values:
                     if env in os.environ:
@@ -55,6 +73,7 @@ class Settings(BaseSettings):
     discord_webhook_url: str = ""
     otel_service_name: str = "crypto-agent"
     otel_exporter_otlp_endpoint: str = ""
+    consensus_score_threshold: float = Field(0.580, ge=0.0, le=1.0)
     enable_ai_advisory: bool = False
     ai_advisory_cooldown_seconds: int = Field(1800, ge=0)
     ai_advisory_on_hold: bool = False

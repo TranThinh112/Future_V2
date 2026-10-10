@@ -13,9 +13,9 @@ WEIGHT_DOMAINS={
     "MARIN": ("critic", .10),
 }
 WEIGHTS={agent: weight for agent, (_, weight) in WEIGHT_DOMAINS.items()}
-def aggregate(votes: list[AgentDecision], symbol: str) -> Consensus:
+def aggregate(votes: list[AgentDecision], symbol: str, threshold: float = 0.580) -> Consensus:
     if len(votes)!=8 or any(v.data_quality!="good" or v.veto for v in votes): return Consensus(symbol=symbol,action="hold",score=0,approved=False,votes=votes,reason_codes=["invalid_or_veto"])
     score=sum(WEIGHTS[v.agent_name]*v.confidence*(1 if v.action in ("buy","sell") else 0) for v in votes)
     actions=[v.action for v in votes]
-    action: Literal["buy", "sell", "hold"] = max(("buy","sell"), key=actions.count) if score>=.68 else "hold"
-    return Consensus(symbol=symbol,action=action,score=score,approved=score>=.68 and action!="hold",votes=votes,reason_codes=[])
+    action: Literal["buy", "sell", "hold"] = max(("buy","sell"), key=actions.count) if score>=threshold else "hold"
+    return Consensus(symbol=symbol,action=action,score=score,approved=score>=threshold and action!="hold",votes=votes,reason_codes=[])

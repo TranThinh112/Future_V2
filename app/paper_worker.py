@@ -91,7 +91,10 @@ class PaperWorker:
         if decision.get("action") == "hold" and not self.settings.ai_advisory_on_hold:
             return False, "deterministic_hold"
         last = self.last_ai_advisory_at.get(symbol, 0)
-        if now - last < self.settings.ai_advisory_cooldown_seconds:
+        cooldown = self.settings.ai_advisory_cooldown_seconds
+        if decision.get("action") in ("buy", "sell"):
+            cooldown = max(300, cooldown // 2)
+        if now - last < cooldown:
             return False, "ai_advisory_cooldown"
         return True, "ai_advisory_allowed"
 
@@ -561,7 +564,7 @@ class PaperWorker:
 
     async def _persist_precheck_consensus(self, round_id: str, symbol: str, decision: dict, agent_snapshot: dict, reason: str):
         consensus = Consensus(symbol=symbol, action="hold", score=0, approved=False, votes=[], reason_codes=["ai_precheck_skipped", reason])
-        event = consensus.model_dump()
+        event = (consensus.model_dump() if hasattr(consensus, "model_dump") else consensus.dict())
         event["round_id"] = round_id
         event["deterministic_decision"] = decision
         event["input_context"] = agent_snapshot
@@ -620,7 +623,7 @@ class PaperWorker:
         for decision_event in ai_audit_events:
             await self.audit.append("agent_decision", decision_event)
         self.last_ai_advisory_at[symbol] = time.time()
-        consensus_event = consensus.model_dump()
+        consensus_event = (consensus.model_dump() if hasattr(consensus, "model_dump") else consensus.dict())
         consensus_event["round_id"] = round_id
         consensus_event["deterministic_decision"] = decision
         consensus_event["ai_usage"] = {
@@ -783,7 +786,7 @@ class PaperWorker:
                     if consensus.approved and consensus.action in ("buy", "sell") and getattr(self.settings, "trading_mode", None) == TradingMode.live:
                         try:
                             proposal_data = self._proposal_context(snapshot, decision, self._portfolio_context({symbol: snapshot.last}), spread, symbol=symbol)
-                            live_res = await self.live_executor.submit(proposal_data, consensus.model_dump())
+                            live_res = await self.live_executor.submit(proposal_data, (consensus.model_dump() if hasattr(consensus, "model_dump") else consensus.dict()))
                             event["live_execution"] = live_res
                         except Exception as exc:
                             event["live_execution_error"] = str(exc)

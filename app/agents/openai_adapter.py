@@ -97,7 +97,7 @@ def _normalize_decision(raw_text, agent_name, snapshot):
         "data_quality": data_quality,
         "veto": payload.get("veto") is True,
     })
-    return AgentDecision.model_validate(payload)
+    return getattr(AgentDecision, "model_validate", getattr(AgentDecision, "parse_obj", AgentDecision))(payload)
 
 class OpenAIAgent:
     def __init__(self, name, api_key, model="gpt-5.4-mini", base_url="https://api.openai.com/v1", timeout=20, retries=2,

@@ -85,25 +85,25 @@ function renderLastRound(r, prices){
   const veto=agents.filter(a=>a.veto).length;
   const vetoAgents=agents.filter(a=>a.veto).map(a=>a.agent);
   $("round-id").textContent = (r.round_id||"-") + " · " + (r.symbol||c.symbol||"-");
-  const hero="<div class=\"hero\"><div class=\"verdict "+esc(c.action||"hold")+"\"><div class=\"action\">"+esc(c.action||"hold")+"</div><div>approved <b>"+(c.approved?"YES":"NO")+"</b></div><div class=\"muted\">score <b>"+n(c.score,3)+"</b> / 0.680</div></div>"+
+  const hero="<div class=\"hero\"><div class=\"verdict "+esc(c.action||"hold")+"\"><div class=\"action\">"+esc(c.action||"hold")+"</div><div>approved <b>"+(c.approved?"YES":"NO")+"</b></div><div class=\"muted\">score <b>"+n(c.score,3)+"</b> / 0.580</div></div>"+
     "<div><div class=\"facts\">"+
     "<div class=\"fact\"><b>Cost</b><span>"+(r.usage_recorded?usd(u.estimated_cost_usd):"-")+"</span></div>"+
     "<div class=\"fact\"><b>Tokens</b><span>"+tok(u.total_tokens)+"</span></div>"+
     "<div class=\"fact\"><b>Votes</b><span>"+buys+" buy · "+sells+" sell · "+holds+" hold · "+veto+" veto</span></div>"+
     "<div class=\"fact\"><b>Last call</b><span>"+when(c.ts)+"</span></div>"+
-    "<div class=\"fact\"><b>Score (Target ≥ 0.680)</b><span>"+n(c.score,3)+" / 0.680</span></div>"+
-    "<div class=\"fact\"><b>Reasons</b><span>"+esc((c.reason_codes&&c.reason_codes.length)?c.reason_codes.join(", "):(c.approved?"Approved":(veto>0?"Vetoed by "+vetoAgents.join(", "):((buys===8||sells===8)?"Score "+n(c.score,3)+" < 0.680":"Score "+n(c.score,3)+" / No consensus"))))+"</span></div>"+
+    "<div class=\"fact\"><b>Score (Target ≥ 0.580)</b><span>"+n(c.score,3)+" / 0.580</span></div>"+
+    "<div class=\"fact\"><b>Reasons</b><span>"+esc((c.reason_codes&&c.reason_codes.length)?c.reason_codes.join(", "):(c.approved?"Approved":(veto>0?"Vetoed by "+vetoAgents.join(", "):((buys===8||sells===8)?"Score "+n(c.score,3)+" < 0.580":"Score "+n(c.score,3)+" / No consensus"))))+"</span></div>"+
     "</div></div></div>";
   let warn = "";
   if(c.approved){
-    warn = "<div class=\"warn ok-warn\" style=\"background:#d6ead5;border-color:#19733a;color:#13221e\"><b>APPROVED FOR LIVE TRADE!</b> Score <b>"+n(c.score,3)+"</b> ≥ 0.680 threshold with 8/8 consensus. Live order sent to OKX.</div>";
+    warn = "<div class=\"warn ok-warn\" style=\"background:#d6ead5;border-color:#19733a;color:#13221e\"><b>APPROVED FOR LIVE TRADE!</b> Score <b>"+n(c.score,3)+"</b> ≥ 0.580 threshold with 8/8 consensus. Live order sent to OKX.</div>";
   } else if(veto > 0){
-    warn = "<div class=\"warn\"><b>NOT APPROVED (Vetoed).</b> Vetoed by <b>"+veto+" agent(s)</b>: "+esc(vetoAgents.join(", "))+". Need 0 veto and score ≥ 0.680 to enter.</div>";
+    warn = "<div class=\"warn\"><b>NOT APPROVED (Vetoed).</b> Vetoed by <b>"+veto+" agent(s)</b>: "+esc(vetoAgents.join(", "))+". Need 0 veto and score ≥ 0.580 to enter.</div>";
   } else if(buys === 8 || sells === 8){
-    const diff = Math.max(0, 0.68 - Number(c.score||0)).toFixed(3);
-    warn = "<div class=\"warn\"><b>NOT APPROVED (Score < 0.680).</b> All 8 agents voted <b>"+(buys===8?"BUY":"SELL")+"</b>, but total Score is <b>"+n(c.score,3)+"</b> (Below required threshold <b>0.680</b>). Need +"+diff+" more confidence score to enter.</div>";
+    const diff = Math.max(0, 0.58 - Number(c.score||0)).toFixed(3);
+    warn = "<div class=\"warn\"><b>NOT APPROVED (Score < 0.580).</b> All 8 agents voted <b>"+(buys===8?"BUY":"SELL")+"</b>, but total Score is <b>"+n(c.score,3)+"</b> (Below required threshold <b>0.580</b>). Need +"+diff+" more confidence score to enter.</div>";
   } else {
-    warn = "<div class=\"warn\"><b>NOT APPROVED.</b> Votes: "+buys+" buy, "+sells+" sell, "+holds+" hold, "+veto+" veto. Need 8/8 consensus & score ≥ 0.680 to enter.</div>";
+    warn = "<div class=\"warn\"><b>NOT APPROVED.</b> Votes: "+buys+" buy, "+sells+" sell, "+holds+" hold, "+veto+" veto. Need 8/8 consensus & score ≥ 0.580 to enter.</div>";
   }
   $("last-round").innerHTML=hero+warn;
 }
@@ -111,7 +111,7 @@ function renderAgentVotes(r, prices){
   const agents=(r&&r.agents)||[]; if(!agents.length){ $("agent-votes").innerHTML="<div class=\"empty\">No agent rows.</div>"; return; }
   const c=(r&&r.consensus)||{};
   const buys=agents.filter(a=>a.action==="buy").length, sells=agents.filter(a=>a.action==="sell").length, holds=agents.filter(a=>a.action==="hold").length, veto=agents.filter(a=>a.veto).length;
-  $("vote-summary").textContent = buys+" buy · "+sells+" sell · "+holds+" hold · "+veto+" veto · Score: "+n(c.score,3)+" / 0.680 ("+(c.approved?"APPROVED":"NOT APPROVED")+")";
+  $("vote-summary").textContent = buys+" buy · "+sells+" sell · "+holds+" hold · "+veto+" veto · Score: "+n(c.score,3)+" / 0.580 ("+(c.approved?"APPROVED":"NOT APPROVED")+")";
   $("agent-votes").innerHTML="<div class=\"agent-grid\">"+agents.map(a=>{
     const now=prices[a.symbol]?prices[a.symbol].price:null, delta=(now&&a.entry_price)?(now/a.entry_price-1)*100:null;
     return "<div class=\"agent "+(a.veto?"veto\">":"\">")+"<div class=\"name\"><span>"+esc(a.agent)+"</span>"+tag(a.action)+"</div><div class=\"meta\">conf "+n(a.confidence,2)+" · "+esc(a.data_quality||"-")+(a.veto?" · veto":"")+"<br>entry "+n(a.entry_price)+" · SL "+n(a.stop_loss_price)+" · TP "+n(a.take_profit_price)+"<br>now Δ "+(delta===null?"-":delta.toFixed(3)+"%")+"</div><details><summary>reasons</summary><pre>"+esc((a.reason_codes||[]).join("\n")||"-")+"</pre></details></div>";
@@ -132,10 +132,10 @@ function renderConsensus(rows){
     let explanation = (r.reason_codes||[]).join(", ");
     if(!r.approved){
       if(vetoes.length) explanation = "VETO by " + vetoes.join(", ");
-      else if(buys === 8 || sells === 8) explanation = "Score " + n(r.score,3) + " < 0.680 threshold (Need ≥ 0.680)";
+      else if(buys === 8 || sells === 8) explanation = "Score " + n(r.score,3) + " < 0.580 threshold (Need ≥ 0.580)";
       else if(!explanation) explanation = "Score " + n(r.score,3) + " / No 8/8 consensus";
     }
-    return "<tr><td>"+when(r.ts)+"</td><td>"+esc(r.symbol)+"</td><td>"+tag(r.action)+"</td><td class=\"num\"><b>"+n(r.score,3)+"</b> / 0.680</td><td>"+(r.approved?"<span class=\"tag buy\">YES</span>":"<span class=\"tag bad\">NO</span>")+"</td><td>"+esc(explanation)+"</td></tr>";
+    return "<tr><td>"+when(r.ts)+"</td><td>"+esc(r.symbol)+"</td><td>"+tag(r.action)+"</td><td class=\"num\"><b>"+n(r.score,3)+"</b> / 0.580</td><td>"+(r.approved?"<span class=\"tag buy\">YES</span>":"<span class=\"tag bad\">NO</span>")+"</td><td>"+esc(explanation)+"</td></tr>";
   }).join("")+"</tbody></table></div>":"<div class=\"empty\">No consensus rows.</div>";
 }
 function renderDecisions(rows){ rows=rows||[]; $("decisions").innerHTML=rows.length?"<div class=\"table-wrap\"><table><thead><tr><th>When</th><th>Agent</th><th>Symbol</th><th>Action</th><th>Quality</th><th>Veto</th><th class=\"num\">Entry</th><th class=\"num\">Cost</th></tr></thead><tbody>"+rows.slice(0,80).map(r=>"<tr><td>"+when(r.ts)+"</td><td>"+esc(r.agent_name)+"</td><td>"+esc(r.symbol)+"</td><td>"+tag(r.action)+"</td><td>"+esc(r.data_quality)+"</td><td>"+(r.veto?"yes":"no")+"</td><td class=\"num\">"+n(r.entry_price)+"</td><td class=\"num\">"+usd(r.estimated_cost_usd)+"</td></tr>").join("")+"</tbody></table></div>":"<div class=\"empty\">No decisions.</div>"; }
