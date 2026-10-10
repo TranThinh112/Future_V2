@@ -129,11 +129,22 @@ function renderConsensus(rows){
     const vetoes=votes.filter(v=>v.veto).map(v=>v.agent_name);
     const buys=votes.filter(v=>v.action==="buy").length;
     const sells=votes.filter(v=>v.action==="sell").length;
-    let explanation = (r.reason_codes||[]).join(", ");
-    if(!r.approved){
+    let explanation = "";
+    const reasons = r.reason_codes || [];
+    if(reasons.includes("position_already_exists")){
+      explanation = "Position already open (" + (r.symbol||"") + ")";
+    } else if(reasons.includes("proposal_required_margin_exceeds_available_cash")){
+      explanation = "Insufficient cash for required margin (5u)";
+    } else if(reasons.includes("deterministic_hold")){
+      explanation = "No conservative technical setup";
+    } else if(reasons.includes("ai_advisory_cooldown")){
+      explanation = "AI Advisory Cooldown active";
+    } else if(!r.approved){
       if(vetoes.length) explanation = "VETO by " + vetoes.join(", ");
-      else if(buys === 8 || sells === 8) explanation = "Score " + n(r.score,3) + " < 0.580 threshold (Need ≥ 0.580)";
-      else if(!explanation) explanation = "Score " + n(r.score,3) + " / No 8/8 consensus";
+      else if(buys === 8 || sells === 8) explanation = "Score " + n(r.score,3) + " < 0.580 threshold";
+      else explanation = reasons.length ? reasons.filter(x=>x!=="ai_precheck_skipped").join(", ") : ("Score " + n(r.score,3) + " / No consensus");
+    } else {
+      explanation = "Approved & Executed";
     }
     return "<tr><td>"+when(r.ts)+"</td><td>"+esc(r.symbol)+"</td><td>"+tag(r.action)+"</td><td class=\"num\"><b>"+n(r.score,3)+"</b> / 0.580</td><td>"+(r.approved?"<span class=\"tag buy\">YES</span>":"<span class=\"tag bad\">NO</span>")+"</td><td>"+esc(explanation)+"</td></tr>";
   }).join("")+"</tbody></table></div>":"<div class=\"empty\">No consensus rows.</div>";
