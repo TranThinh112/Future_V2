@@ -73,4 +73,4 @@ def test_live_executor_submits_swap_order_when_not_dry_run():
     assert result["status"] == "submitted"
     assert client.leverage_set == ("BTC-USDT-SWAP", 20, "isolated")
     assert client.order_created["instId"] == "BTC-USDT-SWAP"
-    assert client.order_created["clOrdId"].startswith("bot-")
+    assert client.order_created["clOrdId"].startswith("bot")

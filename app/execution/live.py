@@ -29,7 +29,7 @@ class LiveFuturesExecutor:
         if (action == "buy" and stop >= entry) or (action == "sell" and stop <= entry): raise ValueError("invalid_protective_stop")
         symbol = SWAP_BY_SYMBOL.get(proposal.get("symbol"))
         if not symbol: raise ValueError("unsupported_live_symbol")
-        return {"instId": symbol, "tdMode": "isolated", "posSide": "long" if action == "buy" else "short", "side": action, "ordType": "market", "target_margin_usdt": self.settings.target_margin_usdt, "lever": self.settings.target_leverage, "target_notional_usdt": self.settings.target_margin_usdt * self.settings.target_leverage, "stop_loss": stop, "take_profit_ladder": proposal.get("take_profit_ladder"), "clOrdId": "bot-" + uuid.uuid4().hex[:28], "created_at_ms": int(time.time() * 1000)}
+        return {"instId": symbol, "tdMode": "isolated", "posSide": "long" if action == "buy" else "short", "side": action, "ordType": "market", "target_margin_usdt": self.settings.target_margin_usdt, "lever": self.settings.target_leverage, "target_notional_usdt": self.settings.target_margin_usdt * self.settings.target_leverage, "stop_loss": stop, "take_profit_ladder": proposal.get("take_profit_ladder"), "clOrdId": "bot" + uuid.uuid4().hex[:24], "created_at_ms": int(time.time() * 1000)}
 
     async def submit(self, proposal, consensus):
         plan = self.plan(proposal, consensus)
