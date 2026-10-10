@@ -35,7 +35,16 @@ class LiveFuturesExecutor:
         plan = self.plan(proposal, consensus)
         if self.settings.live_dry_run: return {"status": "dry_run", "plan": plan}
         swap_symbol = plan["instId"]
-        await self.client.set_swap_leverage(swap_symbol, plan["lever"], plan["tdMode"])
+        try:
+            import inspect
+            sig = inspect.signature(self.client.set_swap_leverage)
+            if "pos_side" in sig.parameters:
+                await self.client.set_swap_leverage(swap_symbol, plan["lever"], plan["tdMode"], pos_side=plan["posSide"])
+            else:
+                await self.client.set_swap_leverage(swap_symbol, plan["lever"], plan["tdMode"])
+        except Exception as exc:
+            import logging
+            logging.getLogger("crypto_agent.execution").warning("set_swap_leverage_non_fatal: %s", exc)
         entry_price = float(proposal.get("entry_price", 0.0))
         ct_val = 0.01 if "BTC" in swap_symbol else 0.1
         notional_per_ct = max(entry_price * ct_val, 1e-6)

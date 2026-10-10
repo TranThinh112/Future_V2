@@ -52,10 +52,13 @@ class OKXClient:
         if body.get("tdMode") != "cash": raise ValueError("spot_orders_must_use_cash_mode")
         if self.read_only: raise PermissionError("okx_client_read_only")
         return await self.request("POST","/api/v5/trade/order",body=body,private=True)
-    async def set_swap_leverage(self, symbol, leverage, margin_mode="isolated"):
+    async def set_swap_leverage(self, symbol, leverage, margin_mode="isolated", pos_side=None):
         self.validate_swap_symbol(symbol)
         if self.read_only: raise PermissionError("okx_client_read_only")
-        return await self.request("POST", "/api/v5/account/set-leverage", body={"instId": symbol, "lever": str(leverage), "mgnMode": margin_mode}, private=True)
+        body = {"instId": symbol, "lever": str(leverage), "mgnMode": margin_mode}
+        if pos_side:
+            body["posSide"] = pos_side
+        return await self.request("POST", "/api/v5/account/set-leverage", body=body, private=True)
     async def create_swap_order(self, body):
         self.validate_swap_symbol(body.get("instId", ""))
         if body.get("tdMode") not in ("isolated", "cross"): raise ValueError("swap_order_requires_margin_mode")
