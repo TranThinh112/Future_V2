@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./crypto.db"; redis_url: str = "redis://localhost:6379/0"
     max_position_pct: float = Field(.10, ge=0, le=1); position_size_headroom: float = Field(.95, gt=0, le=1)
     target_margin_usdt: float = Field(5.0, gt=0)
-    target_leverage: int = Field(20, ge=1, le=100)
+    target_leverage: int = Field(50, ge=1, le=100)
     strategy_min_stop_pct: float = Field(.006, gt=0, le=1)
     strategy_risk_reward: float = Field(2.0, gt=0)
     tp1_pct: float = Field(.004, gt=0, le=1)
@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     live_execution_confirmation: str = ""
     live_dry_run: bool = True
     live_margin_mode: str = "isolated"
-    live_max_leverage: int = Field(20, ge=1, le=100)
+    live_max_leverage: int = Field(50, ge=1, le=100)
     allowed_symbols: tuple[str, ...] = ("BTC-USDT", "ETH-USDT")
     discord_webhook_url: str = ""
     otel_service_name: str = "crypto-agent"

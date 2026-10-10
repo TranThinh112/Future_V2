@@ -59,8 +59,9 @@ class LiveFuturesExecutor:
             "clOrdId": plan["clOrdId"],
         }
         algo = {}
+        decimals = 1 if "BTC" in swap_symbol else 2
         if plan.get("stop_loss"):
-            algo["slTriggerPx"] = str(plan["stop_loss"])
+            algo["slTriggerPx"] = str(round(float(plan["stop_loss"]), decimals))
             algo["slOrdPx"] = "-1"
             algo["slTriggerPxType"] = "last"
         tp_price = None
@@ -69,10 +70,16 @@ class LiveFuturesExecutor:
         elif proposal.get("take_profit"):
             tp_price = proposal["take_profit"]
         if tp_price:
-            algo["tpTriggerPx"] = str(tp_price)
+            algo["tpTriggerPx"] = str(round(float(tp_price), decimals))
             algo["tpOrdPx"] = "-1"
             algo["tpTriggerPxType"] = "last"
         if algo:
             order_body["attachAlgoOrds"] = [algo]
         response = await self.client.create_swap_order(order_body)
+        if isinstance(response, dict) and response.get("data") and isinstance(response["data"], list) and len(response["data"]) > 0:
+            first_data = response["data"][0]
+            scode = str(first_data.get("sCode", "0"))
+            if scode != "0":
+                smsg = first_data.get("sMsg", "Unknown OKX Error")
+                raise ValueError(f"OKX Order Execution Failed ({scode}): {smsg}")
         return {"status": "submitted", "order_body": order_body, "response": response}

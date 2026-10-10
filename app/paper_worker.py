@@ -483,7 +483,7 @@ class PaperWorker:
             "target_leverage": getattr(self.settings, "target_leverage", 20),
             "target_notional_usdt": getattr(self.settings, "target_margin_usdt", 5.0) * getattr(self.settings, "target_leverage", 20),
             "slippage_pct": buy_slippage,
-            "execution_enabled": self.settings.enable_paper_execution,
+            "execution_enabled": (getattr(self.settings, "enable_paper_execution", False) if getattr(self.settings, "trading_mode", None) == TradingMode.paper else (getattr(self.settings, "enable_live_trading", False) and getattr(self.settings, "live_execution_enabled", False))),
             "order_type": "market",
             "data_quality": "good" if executable else "not_applicable",
         }
