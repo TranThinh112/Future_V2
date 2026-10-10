@@ -124,7 +124,7 @@ function renderAgentCost(agents){
 }
 function renderConsensus(rows){
   rows=rows||[];
-  $("consensus").innerHTML=rows.length?"<div class=\"table-wrap\"><table><thead><tr><th>When</th><th>Symbol</th><th>Action</th><th class=\"num\">Score</th><th>Approved</th><th>Why Not Entered / Reasons</th></tr></thead><tbody>"+rows.slice(0,25).map(r=>{
+  $("consensus").innerHTML=rows.length?"<div class=\"table-wrap\"><table><thead><tr><th>When</th><th>Symbol</th><th>Setup Signal</th><th>Final Action</th><th class=\"num\">Score</th><th>Approved</th><th>Why Not Entered / Reasons</th></tr></thead><tbody>"+rows.slice(0,25).map(r=>{
     const votes=r.votes||[];
     const vetoes=votes.filter(v=>v.veto).map(v=>v.agent_name);
     const buys=votes.filter(v=>v.action==="buy").length;
@@ -146,7 +146,9 @@ function renderConsensus(rows){
     } else {
       explanation = "Approved & Executed";
     }
-    return "<tr><td>"+when(r.ts)+"</td><td>"+esc(r.symbol)+"</td><td>"+tag(r.action)+"</td><td class=\"num\"><b>"+n(r.score,3)+"</b> / 0.580</td><td>"+(r.approved?"<span class=\"tag buy\">YES</span>":"<span class=\"tag bad\">NO</span>")+"</td><td>"+esc(explanation)+"</td></tr>";
+    const det = r.deterministic_decision || r.deterministic || {};
+    const setupAction = det.action || "hold";
+    return "<tr><td>"+when(r.ts)+"</td><td>"+esc(r.symbol)+"</td><td>"+tag(setupAction)+"</td><td>"+tag(r.action)+"</td><td class=\"num\"><b>"+n(r.score,3)+"</b> / 0.580</td><td>"+(r.approved?"<span class=\"tag buy\">YES</span>":"<span class=\"tag bad\">NO</span>")+"</td><td>"+esc(explanation)+"</td></tr>";
   }).join("")+"</tbody></table></div>":"<div class=\"empty\">No consensus rows.</div>";
 }
 function renderDecisions(rows){ rows=rows||[]; $("decisions").innerHTML=rows.length?"<div class=\"table-wrap\"><table><thead><tr><th>When</th><th>Agent</th><th>Symbol</th><th>Action</th><th>Quality</th><th>Veto</th><th class=\"num\">Entry</th><th class=\"num\">Cost</th></tr></thead><tbody>"+rows.slice(0,80).map(r=>"<tr><td>"+when(r.ts)+"</td><td>"+esc(r.agent_name)+"</td><td>"+esc(r.symbol)+"</td><td>"+tag(r.action)+"</td><td>"+esc(r.data_quality)+"</td><td>"+(r.veto?"yes":"no")+"</td><td class=\"num\">"+n(r.entry_price)+"</td><td class=\"num\">"+usd(r.estimated_cost_usd)+"</td></tr>").join("")+"</tbody></table></div>":"<div class=\"empty\">No decisions.</div>"; }
