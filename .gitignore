@@ -1,6 +1,11 @@
 .env
 *.db
 paper_state.json
+dashboard-latest.json
+dashboard-report.json
+execution-history.json
+health.json
+portfolio.json
 __pycache__/
 .pytest_cache/
 .venv/

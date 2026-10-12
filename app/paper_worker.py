@@ -63,6 +63,7 @@ class PaperWorker:
         self.exchange_sync_lock = asyncio.Lock()
         self.exchange_sync_attempts = 0
         self.exchange_sync_step = ""
+        self.live_trade_plans: dict[str, dict] = {}
 
     def _account_equity(self) -> tuple[float | None, str]:
         """Funded equity when the read-only exchange sync is live, else the paper ledger."""
@@ -189,6 +190,7 @@ class PaperWorker:
             try:
                 self.exchange_sync_attempts += 1
                 self.exchange_sync_step = "requesting_private_api"
+                previous_positions = dict((self.exchange_portfolio or {}).get("positions") or {})
                 balance_response, positions_response = await asyncio.gather(
                     self.client.balances(), self.client.positions()
                 )
@@ -252,6 +254,14 @@ class PaperWorker:
                 if equity is None:
                     raise ValueError("okx_balance_equity_missing")
                 margin_used = sum(item["margin"] or 0.0 for item in positions.values())
+                await self._audit_closed_live_trades(previous_positions, positions)
+                await self._manage_live_trailing_stops(positions)
+                for s, p_data in positions.items():
+                    p_plan = self.live_trade_plans.get(s)
+                    if p_plan:
+                        p_data["stop_loss"] = p_plan.get("current_sl") or p_plan.get("stop_loss")
+                        p_data["take_profit"] = p_plan.get("current_tp") or p_plan.get("take_profit")
+                        p_data["trailing_stage"] = p_plan.get("trailing_stage", 0)
                 self.exchange_portfolio = {
                     "cash": cash or 0.0,
                     "available_cash": cash or 0.0,
@@ -279,6 +289,212 @@ class PaperWorker:
                 self.exchange_sync_step = "failed"
                 log.warning("okx_account_sync_failed", extra={"error_type": type(exc).__name__, "error": str(exc)[:200]})
                 return self.exchange_portfolio
+
+    async def _audit_closed_live_trades(self, previous_positions: dict, current_positions: dict) -> None:
+        """Persist an exact OKX closing result for each bot-opened position that disappears."""
+        for symbol, previous in previous_positions.items():
+            plan = self.live_trade_plans.get(symbol)
+            if symbol in current_positions or not plan:
+                continue
+            self.live_trade_plans.pop(symbol, None)
+            try:
+                history = await self.client.orders_history(symbol, begin=plan["opened_at_ms"])
+                candidates = [
+                    order for order in (history.get("data") or [])
+                    if str(order.get("reduceOnly")).lower() == "true"
+                    and order.get("posSide") == plan.get("pos_side")
+                ]
+                if not candidates:
+                    raise ValueError("okx_closing_order_not_found")
+                closing = max(candidates, key=lambda order: self._finite(order.get("uTime")) or 0)
+                exit_price = self._finite(closing.get("avgPx"))
+                gross_pnl = self._finite(closing.get("pnl")) or 0.0
+                fee = self._finite(closing.get("fee")) or 0.0
+                target = self._finite(plan.get("current_tp", plan.get("take_profit")))
+                stop = self._finite(plan.get("current_sl", plan.get("stop_loss")))
+                stage = plan.get("trailing_stage", 0)
+                side = plan.get("pos_side")
+                reason = "other_exit"
+                if exit_price is not None and target is not None:
+                    if (side == "long" and exit_price >= target) or (side == "short" and exit_price <= target):
+                        reason = "take_profit"
+                if exit_price is not None and stop is not None:
+                    if (side == "long" and exit_price <= stop) or (side == "short" and exit_price >= stop):
+                        if stage == 1:
+                            reason = "breakeven_exit"
+                        elif stage == 2:
+                            reason = "trailing_profit_exit"
+                        else:
+                            reason = "stop_loss"
+                await self.audit.append("live_trade_closed", {
+                    "symbol": symbol,
+                    "order_id": plan.get("order_id"),
+                    "close_order_id": closing.get("ordId"),
+                    "side": side,
+                    "entry_price": plan.get("entry_price"),
+                    "exit_price": exit_price,
+                    "initial_stop_loss": plan.get("stop_loss"),
+                    "final_stop_loss": stop,
+                    "take_profit": target,
+                    "trailing_stage": stage,
+                    "close_reason": reason,
+                    "gross_pnl_usdt": gross_pnl,
+                    "fee_usdt": fee,
+                    "net_pnl_usdt": round(gross_pnl + fee, 10),
+                    "closed_at_ms": self._finite(closing.get("uTime")),
+                    "okx_source": closing.get("source"),
+                    "position_before_close": previous,
+                })
+            except (httpx.HTTPError, KeyError, TypeError, ValueError, OSError) as exc:
+                log.warning("okx_trade_close_audit_failed", extra={"symbol": symbol, "error_type": type(exc).__name__})
+
+    async def _manage_live_trailing_stops(self, current_positions: dict) -> None:
+        """Evaluate open live positions against TP milestones and amend OKX SL orders dynamically."""
+        if not getattr(self.settings, "live_trailing_stop_enabled", True):
+            return
+        if getattr(self.settings, "trading_mode", None) != TradingMode.live or getattr(self.settings, "live_dry_run", False):
+            return
+        if not current_positions:
+            return
+
+        for symbol, pos in current_positions.items():
+            try:
+                plan = self.live_trade_plans.get(symbol)
+                pos_side = pos.get("side") or "long"
+                entry_px = self._finite(pos.get("entry_price"))
+                mark_px = self._finite(pos.get("mark_price"))
+                if not entry_px or not mark_px or mark_px <= 0:
+                    continue
+
+                decimals = 1 if "BTC" in symbol else 2
+
+                if not plan or not plan.get("algo_id"):
+                    algo_res = await self.client.pending_algo_orders(symbol, ord_type="oco")
+                    algos = (algo_res.get("data") or []) if isinstance(algo_res, dict) else []
+                    matching = [a for a in algos if a.get("instId") == symbol and a.get("posSide") == pos_side]
+                    if not matching:
+                        continue
+                    algo = matching[0]
+                    current_sl = self._finite(algo.get("slTriggerPx")) or 0.0
+                    current_tp = self._finite(algo.get("tpTriggerPx")) or 0.0
+                    tp1_pct = getattr(self.settings, "tp1_pct", 0.004)
+                    tp2_pct = getattr(self.settings, "tp2_pct", 0.010)
+                    tp1 = round(entry_px * (1 + tp1_pct if pos_side == "long" else 1 - tp1_pct), decimals)
+                    tp2 = round(entry_px * (1 + tp2_pct if pos_side == "long" else 1 - tp2_pct), decimals)
+
+                    stage = 0
+                    if pos_side == "long":
+                        if current_sl >= tp1 and tp1 > entry_px:
+                            stage = 2
+                        elif current_sl >= entry_px:
+                            stage = 1
+                    else:
+                        if current_sl <= tp1 and tp1 < entry_px and current_sl > 0:
+                            stage = 2
+                        elif current_sl <= entry_px and current_sl > 0:
+                            stage = 1
+
+                    plan = {
+                        "symbol": symbol,
+                        "order_id": algo.get("ordId") or algo.get("algoId"),
+                        "algo_id": algo.get("algoId"),
+                        "side": "buy" if pos_side == "long" else "sell",
+                        "pos_side": pos_side,
+                        "entry_price": entry_px,
+                        "stop_loss": current_sl,
+                        "current_sl": current_sl,
+                        "take_profit": current_tp,
+                        "current_tp": current_tp,
+                        "tp1": tp1,
+                        "tp2": tp2,
+                        "trailing_stage": stage,
+                        "opened_at_ms": int(time.time() * 1000),
+                        "size": str(pos.get("quantity") or "0"),
+                    }
+                    self.live_trade_plans[symbol] = plan
+
+                if not plan.get("algo_id"):
+                    continue
+
+                if not plan.get("tp1") or not plan.get("tp2"):
+                    tp1_pct = getattr(self.settings, "tp1_pct", 0.004)
+                    tp2_pct = getattr(self.settings, "tp2_pct", 0.010)
+                    plan["tp1"] = round(entry_px * (1 + tp1_pct if pos_side == "long" else 1 - tp1_pct), decimals)
+                    plan["tp2"] = round(entry_px * (1 + tp2_pct if pos_side == "long" else 1 - tp2_pct), decimals)
+
+                stage = plan.get("trailing_stage", 0)
+                target_stage = stage
+                new_sl = None
+                reason = ""
+
+                if pos_side == "long":
+                    if stage < 1 and mark_px >= plan["tp1"]:
+                        target_stage = 1
+                        new_sl = round(entry_px, decimals)
+                        reason = "hit_tp1_moved_sl_to_breakeven"
+                    if mark_px >= plan["tp2"]:
+                        target_stage = 2
+                        new_sl = round(plan["tp1"], decimals)
+                        reason = "hit_tp2_locked_profit_at_tp1"
+                else:
+                    if stage < 1 and mark_px <= plan["tp1"]:
+                        target_stage = 1
+                        new_sl = round(entry_px, decimals)
+                        reason = "hit_tp1_moved_sl_to_breakeven"
+                    if mark_px <= plan["tp2"]:
+                        target_stage = 2
+                        new_sl = round(plan["tp1"], decimals)
+                        reason = "hit_tp2_locked_profit_at_tp1"
+
+                if new_sl is not None and target_stage > stage:
+                    old_sl = plan.get("current_sl") or plan.get("stop_loss")
+                    amend_body = {
+                        "instId": symbol,
+                        "algoId": plan["algo_id"],
+                        "newSlTriggerPx": str(new_sl),
+                        "newSlOrdPx": "-1",
+                        "newTpTriggerPx": str(plan.get("current_tp") or plan.get("take_profit")),
+                        "newTpOrdPx": "-1",
+                    }
+                    res = await self.client.amend_algo_order(amend_body)
+                    data = (res.get("data") or [{}])[0] if isinstance(res, dict) else {}
+                    if str(data.get("sCode", "0")) == "0":
+                        plan["trailing_stage"] = target_stage
+                        plan["current_sl"] = new_sl
+                        log.info(
+                            "live_trade_trailing_stop_updated",
+                            extra={
+                                "symbol": symbol,
+                                "stage": target_stage,
+                                "reason": reason,
+                                "entry_price": entry_px,
+                                "mark_price": mark_px,
+                                "old_sl": old_sl,
+                                "new_sl": new_sl,
+                            },
+                        )
+                        await self.audit.append("live_trade_trailing_stop", {
+                            "symbol": symbol,
+                            "order_id": plan.get("order_id"),
+                            "algo_id": plan.get("algo_id"),
+                            "pos_side": pos_side,
+                            "stage": target_stage,
+                            "reason": reason,
+                            "entry_price": entry_px,
+                            "mark_price": mark_px,
+                            "old_sl": old_sl,
+                            "new_sl": new_sl,
+                            "tp1": plan["tp1"],
+                            "tp2": plan["tp2"],
+                            "current_tp": plan.get("current_tp") or plan.get("take_profit"),
+                        })
+                    else:
+                        log.warning(
+                            "amend_algo_order_failed",
+                            extra={"symbol": symbol, "sCode": data.get("sCode"), "sMsg": data.get("sMsg")},
+                        )
+            except Exception as exc:
+                log.warning("manage_live_trailing_stops_error", extra={"symbol": symbol, "error": str(exc)[:200]})
 
     def _risk_context(self, equity: float, symbol: str, spread: float, slippage: float | None) -> dict:
         effective_max_pos_pct = 1.0 if (getattr(self.settings, "trading_mode", None) == TradingMode.live and equity and equity < 50.0) else self.settings.max_position_pct
@@ -792,6 +1008,33 @@ class PaperWorker:
                             proposal_data = self._proposal_context(snapshot, decision, self._portfolio_context({symbol: snapshot.last}), spread, symbol=symbol)
                             live_res = await self.live_executor.submit(proposal_data, (consensus.model_dump() if hasattr(consensus, "model_dump") else consensus.dict()))
                             event["live_execution"] = live_res
+                            response = live_res.get("response") or {}
+                            result = (response.get("data") or [{}])[0]
+                            if str(result.get("sCode")) == "0":
+                                plan = live_res.get("order_body") or {}
+                                entry_px = proposal_data.get("entry_price") or snapshot.last
+                                decimals = 1 if "BTC" in symbol else 2
+                                pos_side = plan.get("posSide", "long")
+                                tp1_pct = getattr(self.settings, "tp1_pct", 0.004)
+                                tp2_pct = getattr(self.settings, "tp2_pct", 0.010)
+                                trade = {
+                                    "symbol": plan.get("instId"),
+                                    "order_id": result.get("ordId"),
+                                    "side": plan.get("side"),
+                                    "pos_side": pos_side,
+                                    "entry_price": entry_px,
+                                    "stop_loss": proposal_data.get("stop_loss"),
+                                    "take_profit": proposal_data.get("take_profit"),
+                                    "current_sl": proposal_data.get("stop_loss"),
+                                    "current_tp": proposal_data.get("take_profit"),
+                                    "tp1": round(entry_px * (1 + tp1_pct if pos_side == "long" else 1 - tp1_pct), decimals),
+                                    "tp2": round(entry_px * (1 + tp2_pct if pos_side == "long" else 1 - tp2_pct), decimals),
+                                    "trailing_stage": 0,
+                                    "opened_at_ms": int(time.time() * 1000),
+                                    "size": plan.get("sz"),
+                                }
+                                self.live_trade_plans[trade["symbol"]] = trade
+                                await self.audit.append("live_trade_open", trade)
                         except Exception as exc:
                             event["live_execution_error"] = str(exc)
                 else:

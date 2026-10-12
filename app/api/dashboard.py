@@ -72,7 +72,8 @@ function renderPortfolio(p){
     kpi("Margin used", usd(p.margin_used), "read from OKX")+"</div>";
   const rows=positions.length ? positions.map(x=>"<div class=\"pos\"><div class=\"pos-head\"><h3>"+esc(x.symbol)+"</h3>"+tag(x.side)+"</div><div class=\"pos-grid\">"+
     "<div class=\"mini\">Qty<b>"+n(x.quantity,6)+"</b></div><div class=\"mini\">Entry<b>"+n(x.entry_price,6)+"</b></div><div class=\"mini\">Mark<b>"+n(x.mark_price,6)+"</b></div><div class=\"mini\">PnL<b class=\""+clsPnl(x.unrealized_pnl)+"\">"+usd(x.unrealized_pnl)+"</b></div>"+
-    "<div class=\"mini\">Margin<b>"+usd(x.margin)+"</b></div><div class=\"mini\">Lev<b>"+n(x.leverage,0)+"x</b></div><div class=\"mini\">Liquidation<b>"+n(x.liquidation_price,6)+"</b></div><div class=\"mini\">Opened<b>"+esc(x.opened_at||"-")+"</b></div>"+
+    "<div class=\"mini\">Margin<b>"+usd(x.margin)+"</b></div><div class=\"mini\">Lev<b>"+n(x.leverage,0)+"x</b></div><div class=\"mini\">SL<b>"+(x.stop_loss ? n(x.stop_loss, 2) : "-")+"</b></div><div class=\"mini\">TP<b>"+(x.take_profit ? n(x.take_profit, 2) : "-")+"</b></div>"+
+    "<div class=\"mini\">Stage<b>"+(x.trailing_stage === 2 ? "Locked TP1" : (x.trailing_stage === 1 ? "Breakeven" : "Initial"))+"</b></div><div class=\"mini\">Opened<b>"+esc(x.opened_at||"-")+"</b></div>"+
     "</div></div>").join("") : "<div class=\"empty\">No open positions.</div>";
   $("portfolio").innerHTML=head+"<div class=\"muted mono\">synced "+esc(p.synced_at||"-")+" · "+esc(p.source||"-")+"</div>"+rows;
 }

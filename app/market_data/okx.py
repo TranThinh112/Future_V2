@@ -3,6 +3,7 @@ import base64
 import hashlib
 import hmac
 import json
+from urllib.parse import urlencode
 from datetime import UTC, datetime
 
 import httpx
@@ -26,10 +27,12 @@ class OKXClient:
         if symbol not in ("BTC-USDT-SWAP", "ETH-USDT-SWAP"): raise ValueError("unsupported_swap_symbol")
     async def request(self, method, path, *, params=None, body=None, private=False, retries=3):
         body_text=json.dumps(body,separators=(",",":")) if body else ""; last=None
+        query = urlencode(params, doseq=True) if params else ""
+        request_path = f"{path}?{query}" if query else path
         for attempt in range(retries):
             ts=datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00","Z"); headers={"Content-Type":"application/json"}
             if self.demo: headers["x-simulated-trading"]="1"
-            if private: headers.update({"OK-ACCESS-KEY":self.api_key,"OK-ACCESS-PASSPHRASE":self.passphrase,"OK-ACCESS-TIMESTAMP":ts,"OK-ACCESS-SIGN":self.sign(ts,method,path,body_text)})
+            if private: headers.update({"OK-ACCESS-KEY":self.api_key,"OK-ACCESS-PASSPHRASE":self.passphrase,"OK-ACCESS-TIMESTAMP":ts,"OK-ACCESS-SIGN":self.sign(ts,method,request_path,body_text)})
             try:
                 async with httpx.AsyncClient(timeout=httpx.Timeout(10, connect=3)) as c:
                     r=await c.request(method,self.base_url+path,params=params,content=body_text or None,headers=headers)
@@ -47,6 +50,34 @@ class OKXClient:
     async def balances(self): return await self.request("GET","/api/v5/account/balance",private=True)
     async def open_orders(self, symbol=None): return await self.request("GET","/api/v5/trade/orders-pending",params={"instId":symbol} if symbol else None,private=True)
     async def positions(self, symbol=None): return await self.request("GET","/api/v5/account/positions",params={"instId":symbol} if symbol else None,private=True)
+    async def fills_history(self, symbol, begin=None, limit=100):
+        self.validate_swap_symbol(symbol)
+        params = {"instType": "SWAP", "instId": symbol, "limit": str(limit)}
+        if begin is not None:
+            params["begin"] = str(int(begin))
+        return await self.request("GET", "/api/v5/trade/fills-history", params=params, private=True)
+    async def orders_history(self, symbol, begin=None, limit=100):
+        self.validate_swap_symbol(symbol)
+        params = {"instType": "SWAP", "instId": symbol, "limit": str(limit)}
+        if begin is not None:
+            params["begin"] = str(int(begin))
+        return await self.request("GET", "/api/v5/trade/orders-history", params=params, private=True)
+    async def algo_orders_history(self, symbol, begin=None, limit=100):
+        self.validate_swap_symbol(symbol)
+        params = {"ordType": "conditional", "instId": symbol, "limit": str(limit)}
+        if begin is not None:
+            params["begin"] = str(int(begin))
+        return await self.request("GET", "/api/v5/trade/orders-algo-history", params=params, private=True)
+    async def pending_algo_orders(self, symbol=None, ord_type="oco"):
+        params = {"ordType": ord_type, "instType": "SWAP"}
+        if symbol:
+            self.validate_swap_symbol(symbol)
+            params["instId"] = symbol
+        return await self.request("GET", "/api/v5/trade/orders-algo-pending", params=params, private=True)
+    async def amend_algo_order(self, body):
+        self.validate_swap_symbol(body.get("instId", ""))
+        if self.read_only: raise PermissionError("okx_client_read_only")
+        return await self.request("POST", "/api/v5/trade/amend-algos", body=body, private=True)
     async def create_order(self, body):
         self.validate_symbol(body.get("instId", ""))
         if body.get("tdMode") != "cash": raise ValueError("spot_orders_must_use_cash_mode")

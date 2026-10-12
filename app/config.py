@@ -69,6 +69,7 @@ class Settings(BaseSettings):
     live_dry_run: bool = True
     live_margin_mode: str = "isolated"
     live_max_leverage: int = Field(20, ge=1, le=100)
+    live_trailing_stop_enabled: bool = True
     allowed_symbols: tuple[str, ...] = ("BTC-USDT", "ETH-USDT")
     discord_webhook_url: str = ""
     otel_service_name: str = "crypto-agent"
