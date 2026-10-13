@@ -377,8 +377,8 @@ class PaperWorker:
                     algo = matching[0]
                     current_sl = self._finite(algo.get("slTriggerPx")) or 0.0
                     current_tp = self._finite(algo.get("tpTriggerPx")) or 0.0
-                    tp1_pct = getattr(self.settings, "tp1_pct", 0.004)
-                    tp2_pct = getattr(self.settings, "tp2_pct", 0.010)
+                    tp1_pct = getattr(self.settings, "tp1_pct", 0.008)
+                    tp2_pct = getattr(self.settings, "tp2_pct", 0.016)
                     tp1 = round(entry_px * (1 + tp1_pct if pos_side == "long" else 1 - tp1_pct), decimals)
                     tp2 = round(entry_px * (1 + tp2_pct if pos_side == "long" else 1 - tp2_pct), decimals)
 
@@ -417,8 +417,8 @@ class PaperWorker:
                     continue
 
                 if not plan.get("tp1") or not plan.get("tp2"):
-                    tp1_pct = getattr(self.settings, "tp1_pct", 0.004)
-                    tp2_pct = getattr(self.settings, "tp2_pct", 0.010)
+                    tp1_pct = getattr(self.settings, "tp1_pct", 0.008)
+                    tp2_pct = getattr(self.settings, "tp2_pct", 0.016)
                     plan["tp1"] = round(entry_px * (1 + tp1_pct if pos_side == "long" else 1 - tp1_pct), decimals)
                     plan["tp2"] = round(entry_px * (1 + tp2_pct if pos_side == "long" else 1 - tp2_pct), decimals)
 
@@ -551,6 +551,21 @@ class PaperWorker:
             "data_quality": "good" if known else "missing",
         }
 
+    def _htf_trend(self, htf_candle_response) -> str:
+        if not htf_candle_response or isinstance(htf_candle_response, Exception):
+            return "neutral"
+        htf_candles = candles_frame(htf_candle_response.get("data", []))
+        if len(htf_candles) < 30:
+            return "neutral"
+        htf_close = htf_candles["close"].astype(float)
+        htf_ema50 = htf_close.ewm(span=50, adjust=False).mean().iloc[-1]
+        last_px = htf_close.iloc[-1]
+        if last_px > htf_ema50:
+            return "bullish"
+        elif last_px < htf_ema50:
+            return "bearish"
+        return "neutral"
+
     def _structure_context(self, candles, snapshot, values: dict) -> dict:
         empty = {
             "vwap": None, "vwap_deviation_pct": None, "bollinger_position_pct": None,
@@ -657,26 +672,26 @@ class PaperWorker:
         quantity = notional = position_pct = risk_reward = None
         if action == "buy" and entry and stop and entry > stop and capital_cap:
             risk_amount = (equity or 0.0) * self.settings.risk_per_trade_pct
-            if is_small_account and capital_cap and capital_cap >= getattr(self.settings, "target_margin_usdt", 5.0):
-                target_notional = getattr(self.settings, "target_margin_usdt", 5.0) * getattr(self.settings, "target_leverage", 20)
+            if is_small_account and capital_cap and capital_cap >= getattr(self.settings, "target_margin_usdt", 4.0):
+                target_notional = getattr(self.settings, "target_margin_usdt", 4.0) * getattr(self.settings, "target_leverage", 20)
                 quantity = target_notional / entry
                 notional = target_notional
             else:
                 quantity = min(risk_amount / (entry - stop), capital_cap / entry)
                 notional = quantity * entry
-            position_pct = (getattr(self.settings, "target_margin_usdt", 5.0) / equity) if (is_small_account and equity) else (notional / equity if equity else None)
+            position_pct = (getattr(self.settings, "target_margin_usdt", 4.0) / equity) if (is_small_account and equity) else (notional / equity if equity else None)
             if target and target > entry:
                 risk_reward = (target - entry) / (entry - stop)
         elif action == "sell" and entry and stop and stop > entry and capital_cap:
             risk_amount = (equity or 0.0) * self.settings.risk_per_trade_pct
-            if is_small_account and capital_cap and capital_cap >= getattr(self.settings, "target_margin_usdt", 5.0):
-                target_notional = getattr(self.settings, "target_margin_usdt", 5.0) * getattr(self.settings, "target_leverage", 20)
+            if is_small_account and capital_cap and capital_cap >= getattr(self.settings, "target_margin_usdt", 4.0):
+                target_notional = getattr(self.settings, "target_margin_usdt", 4.0) * getattr(self.settings, "target_leverage", 20)
                 quantity = target_notional / entry
                 notional = target_notional
             else:
                 quantity = min(risk_amount / (stop - entry), capital_cap / entry)
                 notional = quantity * entry
-            position_pct = (getattr(self.settings, "target_margin_usdt", 5.0) / equity) if (is_small_account and equity) else (notional / equity if equity else None)
+            position_pct = (getattr(self.settings, "target_margin_usdt", 4.0) / equity) if (is_small_account and equity) else (notional / equity if equity else None)
             if target and entry > target:
                 risk_reward = (entry - target) / (stop - entry)
         executable = action in ("buy", "sell")
@@ -695,16 +710,16 @@ class PaperWorker:
             "position_pct": position_pct,
             "max_position_pct": effective_max_pos_pct,
             "risk_per_trade_pct": self.settings.risk_per_trade_pct,
-            "target_margin_usdt": getattr(self.settings, "target_margin_usdt", 5.0),
+            "target_margin_usdt": getattr(self.settings, "target_margin_usdt", 4.0),
             "target_leverage": getattr(self.settings, "target_leverage", 20),
-            "target_notional_usdt": getattr(self.settings, "target_margin_usdt", 5.0) * getattr(self.settings, "target_leverage", 20),
+            "target_notional_usdt": getattr(self.settings, "target_margin_usdt", 4.0) * getattr(self.settings, "target_leverage", 20),
             "slippage_pct": buy_slippage,
             "execution_enabled": (getattr(self.settings, "enable_paper_execution", False) if getattr(self.settings, "trading_mode", None) == TradingMode.paper else (getattr(self.settings, "enable_live_trading", False) and getattr(self.settings, "live_execution_enabled", False))),
             "order_type": "market",
             "data_quality": "good" if executable else "not_applicable",
         }
 
-    def _agent_snapshot(self, symbol, snapshot, values, ticker_row, orderbook, spread, portfolio, risk, news, proposal, candles):
+    def _agent_snapshot(self, symbol, snapshot, values, ticker_row, orderbook, spread, portfolio, risk, news, proposal, candles, htf_trend: str = "neutral"):
         """Assemble the per-call context shipped to all eight agents."""
         features = {}
         for key, value in values.items():
@@ -735,7 +750,9 @@ class PaperWorker:
             "risk": risk,
             "proposal": proposal,
             "as_of": datetime.now(UTC).isoformat(timespec="seconds"),
-            "timeframe": "1m",
+            "timeframe": getattr(getattr(self, "settings", None), "strategy_bar", "15m"),
+            "htf_timeframe": getattr(getattr(self, "settings", None), "strategy_htf_bar", "1H"),
+            "htf_trend": htf_trend,
             "data_quality": {
                 "market": "good",
                 "features": "good" if features else "missing",
@@ -773,7 +790,7 @@ class PaperWorker:
         available_cash = self._finite(portfolio.get("available_cash"))
         if available_cash is None:
             available_cash = self._finite(portfolio.get("cash"))
-        required_margin = self._finite(proposal.get("target_margin_usdt")) or 5.0
+        required_margin = self._finite(proposal.get("target_margin_usdt")) or getattr(self.settings, "target_margin_usdt", 4.0)
         if proposal.get("action") in ("buy", "sell") and available_cash is not None and required_margin > max(available_cash, 0):
             return "proposal_required_margin_exceeds_available_cash"
         position_pct = self._finite(proposal.get("position_pct"))
@@ -812,7 +829,7 @@ class PaperWorker:
             log.warning("news_fetch_failed", extra={"symbol": symbol, "error": f"{type(exc).__name__}: {exc}"})
             return NewsService.unavailable("news_fetch_exception", symbol)
 
-    async def _ai_round(self, symbol, snapshot, values, row, orderbook_response, spread, decision, candles):
+    async def _ai_round(self, symbol, snapshot, values, row, orderbook_response, spread, decision, candles, htf_trend: str = "neutral"):
         """Run one advisory round for all eight agents and persist decisions plus usage totals."""
         round_id = uuid.uuid4().hex[:12]
         prices = {symbol: snapshot.last}
@@ -824,7 +841,7 @@ class PaperWorker:
         news = await self._fetch_news(symbol)
         proposal = self._proposal_context(snapshot, decision, portfolio, slippage, symbol=symbol)
         agent_snapshot = self._agent_snapshot(
-            symbol, snapshot, values, row, orderbook, spread, portfolio, risk, news, proposal, candles
+            symbol, snapshot, values, row, orderbook, spread, portfolio, risk, news, proposal, candles, htf_trend=htf_trend
         )
         precheck_reason = self._ai_precheck_reason(proposal, portfolio, orderbook, risk)
         if precheck_reason:
@@ -860,8 +877,10 @@ class PaperWorker:
     async def ai_probe(self, symbol: str, force: bool = False) -> dict:
         """Operator-triggered single AI round on live data; bypasses the advisory cooldown."""
         await self._sync_exchange_portfolio(force=True)
-        result, candle_response, orderbook_response = await asyncio.gather(
-            self.client.ticker(symbol), self.client.candles(symbol), self.client.order_book(symbol), return_exceptions=True
+        bar = getattr(self.settings, "strategy_bar", "15m")
+        htf_bar = getattr(self.settings, "strategy_htf_bar", "1H")
+        result, candle_response, orderbook_response, htf_candle_response = await asyncio.gather(
+            self.client.ticker(symbol), self.client.candles(symbol, bar=bar), self.client.order_book(symbol), self.client.candles(symbol, bar=htf_bar, limit=100), return_exceptions=True
         )
         for response in (result, candle_response):
             if isinstance(response, Exception):
@@ -874,21 +893,23 @@ class PaperWorker:
         features = compute_features(candles) if len(candles) >= 200 else None
         values = features.iloc[-1].to_dict() if features is not None and not features.empty else {}
         spread = (snapshot.ask - snapshot.bid) / snapshot.ask
+        htf_trend = self._htf_trend(htf_candle_response)
         decision = signal(
                     values,
                     spread,
                     self.settings.max_spread_pct,
-                    getattr(self.settings, "strategy_min_stop_pct", 0.006),
+                    getattr(self.settings, "strategy_min_stop_pct", 0.012),
                     getattr(self.settings, "strategy_risk_reward", 2.0),
-                    getattr(self.settings, "tp1_pct", 0.004),
+                    getattr(self.settings, "tp1_pct", 0.008),
                     getattr(self.settings, "tp1_close_pct", 0.30),
-                    getattr(self.settings, "tp2_pct", 0.010),
+                    getattr(self.settings, "tp2_pct", 0.016),
                     getattr(self.settings, "tp2_close_pct", 0.30),
-                    getattr(self.settings, "tp3_pct", 0.020),
+                    getattr(self.settings, "tp3_pct", 0.024),
                     getattr(self.settings, "tp3_close_pct", 0.40),
+                    htf_trend=htf_trend,
                 )
         consensus, ai_audit_events, _ = await self._ai_round(
-            symbol, snapshot, values, row, orderbook_response, spread, decision, candles
+            symbol, snapshot, values, row, orderbook_response, spread, decision, candles, htf_trend=htf_trend
         )
         return {
             "symbol": symbol,
@@ -949,8 +970,10 @@ class PaperWorker:
         try:
             await self._sync_exchange_portfolio()
             self._rebase_risk_state()
-            result, candle_response, orderbook_response = await asyncio.gather(
-                self.client.ticker(symbol), self.client.candles(symbol), self.client.order_book(symbol), return_exceptions=True
+            bar = getattr(self.settings, "strategy_bar", "15m")
+            htf_bar = getattr(self.settings, "strategy_htf_bar", "1H")
+            result, candle_response, orderbook_response, htf_candle_response = await asyncio.gather(
+                self.client.ticker(symbol), self.client.candles(symbol, bar=bar), self.client.order_book(symbol), self.client.candles(symbol, bar=htf_bar, limit=100), return_exceptions=True
             )
             if isinstance(result, Exception) or isinstance(candle_response, Exception):
                 raise result if isinstance(result, Exception) else candle_response
@@ -969,20 +992,22 @@ class PaperWorker:
                 features = compute_features(candles) if len(candles) >= 200 else None
                 latest = features.iloc[-1] if features is not None and not features.empty else None
                 values = latest.to_dict() if latest is not None else {}
+                htf_trend = self._htf_trend(htf_candle_response)
                 decision = signal(
                     values,
                     spread,
                     self.settings.max_spread_pct,
-                    getattr(self.settings, "strategy_min_stop_pct", 0.006),
+                    getattr(self.settings, "strategy_min_stop_pct", 0.012),
                     getattr(self.settings, "strategy_risk_reward", 2.0),
-                    getattr(self.settings, "tp1_pct", 0.004),
+                    getattr(self.settings, "tp1_pct", 0.008),
                     getattr(self.settings, "tp1_close_pct", 0.30),
-                    getattr(self.settings, "tp2_pct", 0.010),
+                    getattr(self.settings, "tp2_pct", 0.016),
                     getattr(self.settings, "tp2_close_pct", 0.30),
-                    getattr(self.settings, "tp3_pct", 0.020),
+                    getattr(self.settings, "tp3_pct", 0.024),
                     getattr(self.settings, "tp3_close_pct", 0.40),
+                    htf_trend=htf_trend,
                 )
-                event = {"symbol": symbol, "price": snapshot.last, "spread_pct": spread, "candle_count": len(candles), "ema20": float(values["ema20"]) if values.get("ema20") is not None else None, "rsi": float(values["rsi"]) if values.get("rsi") is not None else None, **decision}
+                event = {"symbol": symbol, "price": snapshot.last, "spread_pct": spread, "candle_count": len(candles), "timeframe": bar, "htf_trend": htf_trend, "ema20": float(values["ema20"]) if values.get("ema20") is not None else None, "rsi": float(values["rsi"]) if values.get("rsi") is not None else None, **decision}
                 exit_fill = self.broker.mark(symbol, snapshot.last)
                 if exit_fill:
                     event["exit_fill"] = exit_fill
@@ -1000,7 +1025,7 @@ class PaperWorker:
                 should_call, ai_reason = self.should_call_ai(symbol, decision, time.time())
                 if should_call:
                     consensus, _, _ = await self._ai_round(
-                        symbol, snapshot, values, row, orderbook_response, spread, decision, candles
+                        symbol, snapshot, values, row, orderbook_response, spread, decision, candles, htf_trend=htf_trend
                     )
                     event["agent_consensus"] = {"action":consensus.action,"score":consensus.score,"approved":consensus.approved,"reason_codes":consensus.reason_codes}
                     if consensus.approved and consensus.action in ("buy", "sell") and getattr(self.settings, "trading_mode", None) == TradingMode.live:
@@ -1015,8 +1040,8 @@ class PaperWorker:
                                 entry_px = proposal_data.get("entry_price") or snapshot.last
                                 decimals = 1 if "BTC" in symbol else 2
                                 pos_side = plan.get("posSide", "long")
-                                tp1_pct = getattr(self.settings, "tp1_pct", 0.004)
-                                tp2_pct = getattr(self.settings, "tp2_pct", 0.010)
+                                tp1_pct = getattr(self.settings, "tp1_pct", 0.008)
+                                tp2_pct = getattr(self.settings, "tp2_pct", 0.016)
                                 trade = {
                                     "symbol": plan.get("instId"),
                                     "order_id": result.get("ordId"),

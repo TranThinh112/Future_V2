@@ -5,14 +5,15 @@ def signal(
     latest,
     spread_pct: float,
     max_spread_pct: float,
-    min_stop_pct: float = 0.006,
+    min_stop_pct: float = 0.012,
     risk_reward: float = 2.0,
-    tp1_pct: float = 0.004,
+    tp1_pct: float = 0.008,
     tp1_close_pct: float = 0.30,
-    tp2_pct: float = 0.010,
+    tp2_pct: float = 0.016,
     tp2_close_pct: float = 0.30,
-    tp3_pct: float = 0.020,
+    tp3_pct: float = 0.024,
     tp3_close_pct: float = 0.40,
+    htf_trend: str | None = None,
 ) -> dict:
     required = ("ema20", "ema50", "rsi", "macd", "macd_signal", "atr", "close")
     if any(key not in latest or latest[key] is None for key in required):
@@ -37,6 +38,8 @@ def signal(
         "tp3_close_pct": tp3_close_pct,
     }
     if close > ema20 > ema50 and 52 <= rsi <= 68 and macd > macd_signal:
+        if htf_trend == "bearish":
+            return {"action": "hold", "reason": "htf_trend_conflict_bearish", "htf_trend": "bearish"}
         return {
             "action": "buy",
             "reason": "trend_momentum",
@@ -48,8 +51,11 @@ def signal(
                 "tp3": float(close * (1 + tp3_pct)),
                 **ladder,
             },
+            "htf_trend": htf_trend or "aligned",
         }
     if close < ema20 < ema50 and 32 <= rsi <= 48 and macd < macd_signal:
+        if htf_trend == "bullish":
+            return {"action": "hold", "reason": "htf_trend_conflict_bullish", "htf_trend": "bullish"}
         return {
             "action": "sell",
             "reason": "trend_momentum_short",
@@ -61,5 +67,6 @@ def signal(
                 "tp3": float(close * (1 - tp3_pct)),
                 **ladder,
             },
+            "htf_trend": htf_trend or "aligned",
         }
     return {"action": "hold", "reason": "no_conservative_setup"}

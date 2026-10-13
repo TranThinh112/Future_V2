@@ -50,15 +50,17 @@ class Settings(BaseSettings):
     trading_mode: TradingMode = TradingMode.paper
     database_url: str = "sqlite+aiosqlite:///./crypto.db"; redis_url: str = "redis://localhost:6379/0"
     max_position_pct: float = Field(.10, ge=0, le=1); position_size_headroom: float = Field(.95, gt=0, le=1)
-    target_margin_usdt: float = Field(5.0, gt=0)
+    target_margin_usdt: float = Field(4.0, gt=0)
     target_leverage: int = Field(20, ge=1, le=100)
-    strategy_min_stop_pct: float = Field(.006, gt=0, le=1)
+    strategy_bar: str = "15m"
+    strategy_htf_bar: str = "1H"
+    strategy_min_stop_pct: float = Field(.012, gt=0, le=1)
     strategy_risk_reward: float = Field(2.0, gt=0)
-    tp1_pct: float = Field(.004, gt=0, le=1)
+    tp1_pct: float = Field(.008, gt=0, le=1)
     tp1_close_pct: float = Field(.30, gt=0, le=1)
-    tp2_pct: float = Field(.010, gt=0, le=1)
+    tp2_pct: float = Field(.016, gt=0, le=1)
     tp2_close_pct: float = Field(.30, gt=0, le=1)
-    tp3_pct: float = Field(.020, gt=0, le=1)
+    tp3_pct: float = Field(.024, gt=0, le=1)
     tp3_close_pct: float = Field(.40, gt=0, le=1)
     max_total_exposure_pct: float = Field(.30, ge=0, le=1)
     risk_per_trade_pct: float = Field(.005, ge=0, le=1); daily_loss_limit_pct: float = Field(.02, ge=0, le=1)
