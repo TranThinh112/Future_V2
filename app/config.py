@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     trading_mode: TradingMode = TradingMode.paper
     database_url: str = "sqlite+aiosqlite:///./crypto.db"; redis_url: str = "redis://localhost:6379/0"
     max_position_pct: float = Field(.10, ge=0, le=1); position_size_headroom: float = Field(.95, gt=0, le=1)
-    target_margin_usdt: float = Field(4.0, gt=0)
+    target_margin_usdt: float = Field(3.5, gt=0)
     target_leverage: int = Field(20, ge=1, le=100)
     strategy_bar: str = "15m"
     strategy_htf_bar: str = "1H"

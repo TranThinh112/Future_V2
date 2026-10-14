@@ -14,6 +14,7 @@ def signal(
     tp3_pct: float = 0.024,
     tp3_close_pct: float = 0.40,
     htf_trend: str | None = None,
+    candles=None,
 ) -> dict:
     required = ("ema20", "ema50", "rsi", "macd", "macd_signal", "atr", "close")
     if any(key not in latest or latest[key] is None for key in required):
@@ -37,9 +38,47 @@ def signal(
         "tp3_pct": tp3_pct,
         "tp3_close_pct": tp3_close_pct,
     }
+
+    # Guard: Detect recent strong bottom bounce to avoid shorting into V-shaped recovery
+    if candles is not None and len(candles) >= 5:
+        tail5 = candles.tail(5)
+        lowest_tail = float(tail5["low"].astype(float).min())
+        bounce_pct = (close - lowest_tail) / lowest_tail if lowest_tail > 0 else 0.0
+        # If price has bounced > 0.8% off the 5-candle low or current candle has a long lower shadow (> 40% of range)
+        last_c = candles.iloc[-1]
+        c_open, c_high, c_low, c_close = float(last_c["open"]), float(last_c["high"]), float(last_c["low"]), float(last_c["close"])
+        c_range = max(c_high - c_low, 1e-6)
+        lower_shadow = min(c_open, c_close) - c_low
+        has_strong_hammer = (lower_shadow / c_range) >= 0.40 and c_close > c_open
+        if bounce_pct >= 0.008 or has_strong_hammer:
+            recent_bounce_risk = True
+        else:
+            recent_bounce_risk = False
+    else:
+        recent_bounce_risk = False
+
+    # Guard: Detect recent top rejection to avoid buying into top-drop
+    if candles is not None and len(candles) >= 5:
+        tail5 = candles.tail(5)
+        highest_tail = float(tail5["high"].astype(float).max())
+        drop_pct = (highest_tail - close) / highest_tail if highest_tail > 0 else 0.0
+        last_c = candles.iloc[-1]
+        c_open, c_high, c_low, c_close = float(last_c["open"]), float(last_c["high"]), float(last_c["low"]), float(last_c["close"])
+        c_range = max(c_high - c_low, 1e-6)
+        upper_shadow = c_high - max(c_open, c_close)
+        has_shooting_star = (upper_shadow / c_range) >= 0.40 and c_close < c_open
+        if drop_pct >= 0.008 or has_shooting_star:
+            recent_drop_risk = True
+        else:
+            recent_drop_risk = False
+    else:
+        recent_drop_risk = False
+
     if close > ema20 > ema50 and 52 <= rsi <= 68 and macd > macd_signal:
         if htf_trend == "bearish":
             return {"action": "hold", "reason": "htf_trend_conflict_bearish", "htf_trend": "bearish"}
+        if recent_drop_risk:
+            return {"action": "hold", "reason": "recent_top_rejection_pullback", "htf_trend": htf_trend or "aligned"}
         return {
             "action": "buy",
             "reason": "trend_momentum",
@@ -56,6 +95,8 @@ def signal(
     if close < ema20 < ema50 and 32 <= rsi <= 48 and macd < macd_signal:
         if htf_trend == "bullish":
             return {"action": "hold", "reason": "htf_trend_conflict_bullish", "htf_trend": "bullish"}
+        if recent_bounce_risk:
+            return {"action": "hold", "reason": "recent_bottom_bounce_rebound", "htf_trend": htf_trend or "aligned"}
         return {
             "action": "sell",
             "reason": "trend_momentum_short",
