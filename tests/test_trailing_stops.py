@@ -16,6 +16,7 @@ async def test_manage_live_trailing_stops_long_tp1_and_tp2():
         okx_read_only=False,
         live_execution_confirmation="I_UNDERSTAND_LIVE_TRADING_RISK",
         live_trailing_stop_enabled=True,
+        breakeven_offset_pct=0.0015,
         tp1_pct=0.004,
         tp2_pct=0.010,
     )
@@ -59,16 +60,17 @@ async def test_manage_live_trailing_stops_long_tp1_and_tp2():
     assert plan["tp1"] == 2575.67
     assert plan["tp2"] == 2591.06
 
-    # Test 2: Price hits TP1 (2576.00 >= 2575.67) -> Amend SL to Breakeven (2565.41)
+    # Test 2: Price hits TP1 (2576.00 >= 2575.67) -> Amend SL to Breakeven + fee offset (2565.41 * 1.0015 = 2569.26)
+    expected_be_sl = round(2565.41 * (1 + 0.0015), 2)
     positions["ETH-USDT-SWAP"]["mark_price"] = 2576.00
     await worker._manage_live_trailing_stops(positions)
     assert worker.client.amend_algo_order.call_count == 1
     call_args = worker.client.amend_algo_order.call_args[0][0]
     assert call_args["algoId"] == "algo_eth_123"
-    assert call_args["newSlTriggerPx"] == "2565.41"
+    assert call_args["newSlTriggerPx"] == str(expected_be_sl)
     assert call_args["newTpTriggerPx"] == "2596.23"
     assert plan["trailing_stage"] == 1
-    assert plan["current_sl"] == 2565.41
+    assert plan["current_sl"] == expected_be_sl
 
     # Test 3: Price hits TP2 (2592.00 >= 2591.06) -> Amend SL to TP1 (2575.67)
     positions["ETH-USDT-SWAP"]["mark_price"] = 2592.00
@@ -90,6 +92,7 @@ async def test_manage_live_trailing_stops_short_tp1_and_tp2():
         okx_read_only=False,
         live_execution_confirmation="I_UNDERSTAND_LIVE_TRADING_RISK",
         live_trailing_stop_enabled=True,
+        breakeven_offset_pct=0.0015,
         tp1_pct=0.004,
         tp2_pct=0.010,
     )
@@ -128,12 +131,13 @@ async def test_manage_live_trailing_stops_short_tp1_and_tp2():
     await worker._manage_live_trailing_stops(positions)
     assert worker.client.amend_algo_order.call_count == 0
 
-    # Price drops to 83600 <= 83664 (TP1) -> SL to Breakeven (84000.0)
+    # Price drops to 83600 <= 83664 (TP1) -> SL to Breakeven minus fee offset (84000 * (1 - 0.0015) = 83874.0)
+    expected_be_sl = round(84000.0 * (1 - 0.0015), 1)
     positions["BTC-USDT-SWAP"]["mark_price"] = 83600.0
     await worker._manage_live_trailing_stops(positions)
     assert worker.client.amend_algo_order.call_count == 1
     call_args = worker.client.amend_algo_order.call_args[0][0]
-    assert call_args["newSlTriggerPx"] == "84000.0"
+    assert call_args["newSlTriggerPx"] == str(expected_be_sl)
     plan = worker.live_trade_plans["BTC-USDT-SWAP"]
     assert plan["trailing_stage"] == 1
 

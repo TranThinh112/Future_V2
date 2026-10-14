@@ -72,6 +72,7 @@ class Settings(BaseSettings):
     live_margin_mode: str = "isolated"
     live_max_leverage: int = Field(20, ge=1, le=100)
     live_trailing_stop_enabled: bool = True
+    breakeven_offset_pct: float = Field(0.0015, ge=0.0, le=0.01)
     allowed_symbols: tuple[str, ...] = ("BTC-USDT", "ETH-USDT")
     discord_webhook_url: str = ""
     otel_service_name: str = "crypto-agent"

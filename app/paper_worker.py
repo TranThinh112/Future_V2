@@ -427,11 +427,12 @@ class PaperWorker:
                 new_sl = None
                 reason = ""
 
+                be_offset = getattr(self.settings, "breakeven_offset_pct", 0.0015)
                 if pos_side == "long":
                     if stage < 1 and mark_px >= plan["tp1"]:
                         target_stage = 1
-                        new_sl = round(entry_px, decimals)
-                        reason = "hit_tp1_moved_sl_to_breakeven"
+                        new_sl = round(entry_px * (1 + be_offset), decimals)
+                        reason = "hit_tp1_moved_sl_to_breakeven_plus_fee"
                     if mark_px >= plan["tp2"]:
                         target_stage = 2
                         new_sl = round(plan["tp1"], decimals)
@@ -439,8 +440,8 @@ class PaperWorker:
                 else:
                     if stage < 1 and mark_px <= plan["tp1"]:
                         target_stage = 1
-                        new_sl = round(entry_px, decimals)
-                        reason = "hit_tp1_moved_sl_to_breakeven"
+                        new_sl = round(entry_px * (1 - be_offset), decimals)
+                        reason = "hit_tp1_moved_sl_to_breakeven_plus_fee"
                     if mark_px <= plan["tp2"]:
                         target_stage = 2
                         new_sl = round(plan["tp1"], decimals)
