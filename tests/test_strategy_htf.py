@@ -101,3 +101,25 @@ def test_htf_trend_calculation():
 
     candles_bearish = [[str(i), "200", "210", "190", str(200 - i * 2), "10", "1000", "1000", "1"] for i in range(50)]
     assert worker._htf_trend({"data": candles_bearish}) == "bearish"
+
+
+def test_strategy_guards_rejection_and_bollinger():
+    features = {
+        "close": 2500.0,
+        "ema20": 2480.0,
+        "ema50": 2450.0,
+        "rsi": 60.0,
+        "macd": 2.0,
+        "macd_signal": 1.0,
+        "atr": 10.0,
+        "bb_upper": 2490.0,
+        "bb_lower": 2430.0,
+    }
+    sig_bb = signal(features, 0.0001, 0.001)
+    assert sig_bb["action"] == "hold"
+    assert sig_bb["reason"] == "bollinger_upper_overbought"
+
+    features_over = dict(features, bb_upper=2800.0, close=2650.0, ema20=2480.0)
+    sig_over = signal(features_over, 0.0001, 0.001)
+    assert sig_over["action"] == "hold"
+    assert sig_over["reason"] == "over_extended_above_ema20"
